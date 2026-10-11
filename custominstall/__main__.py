@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from events import Events
 
-from pyctr.crypto import CryptoEngine, Keyslot, load_seeddb, get_seed
+from pyctr.crypto import CryptoEngine, Keyslot, MissingSeedError, load_seeddb, get_seed
 from pyctr.type.cdn import CDNReader, CDNError
 from pyctr.type.cia import CIAReader, CIAError
 from pyctr.type.ncch import NCCHSection
@@ -119,6 +119,27 @@ def get_free_space(path: 'Union[PathLike, bytes, str]'):
         stv = statvfs(path)
         free_bytes = stv.f_bavail * stv.f_frsize
     return free_bytes
+
+
+def replace_title_dir(new_root: 'Union[PathLike, bytes, str]', title_root: 'Union[PathLike, bytes, str]',
+                      backup_root: 'Union[PathLike, bytes, str]'):
+    """Moves new_root into place at title_root. An existing title_root is kept as backup_root until the move
+    works, and is put back if it fails. backup_root must be on the same filesystem."""
+    had_old = isdir(title_root)
+    if had_old:
+        rename(title_root, backup_root)
+    try:
+        rename(new_root, title_root)
+    except Exception:
+        if had_old:
+            try:
+                rename(backup_root, title_root)
+            except Exception as e:
+                # the caller logs this, the message has to say where the original title is
+                raise OSError(f'Could not put the original title back, it is now at {backup_root}') from e
+        raise
+    if had_old:
+        rmtree(backup_root, ignore_errors=True)
 
 
 def load_cifinish(path: 'Union[PathLike, bytes, str]'):
@@ -273,6 +294,10 @@ class CustomInstall:
             self.log(f'Reading {path}')
             try:
                 reader = self.get_reader(path)
+            except MissingSeedError:
+                # opening the reader looks up the seed, so this is where a missing one shows up
+                self.log(f'Skipping {path} - seed not found, update seeddb.bin')
+                continue
             except (CIAError, CDNError, TitleMetadataError):
                 self.log(f"Couldn't read {path}, likely corrupt or not a CIA or CDN title")
                 continue
@@ -295,6 +320,20 @@ class CustomInstall:
         return isdir(sd_path)
 
     def start(self):
+        # leftovers from an install that was cut off, these are never removed automatically
+        # since an old backup may be the only copy of a title
+        try:
+            leftovers = sorted(d.name for d in scandir(self.sd)
+                               if d.is_dir() and d.name.startswith(('ci-install-temp-', 'ci-install-old-')))
+        except OSError:
+            leftovers = []
+        if leftovers:
+            self.log(f'Found folders left over from an earlier install in {self.sd}:', 1)
+            for name in leftovers:
+                self.log(f'  {name}', 1)
+            self.log('Check them and remove them by hand if they are not needed. '
+                     'A ci-install-old folder may be the only copy of a title.', 1)
+
         if not (save3ds_fuse_path and isfile(save3ds_fuse_path)):
             self.log("Couldn't find " + save3ds_fuse_path, 2)
             return None, False, 0
@@ -399,6 +438,12 @@ class CustomInstall:
 
                 self.event.on_cia_start(idx)
                 self.event.update_status(path, InstallStatus.Starting)
+
+                # looked up now so a missing seed stops this title before anything is written
+                if cia.contents[0].flags.uses_seed:
+                    seed = get_seed(cia.contents[0].program_id)
+                else:
+                    seed = None
 
                 temp_title_root = join(self.sd, f'ci-install-temp-{cia.tmd.title_id}-{randint(0, 0xFFFFFFFF):08x}')
                 if not self.skip_contents:
@@ -603,13 +648,13 @@ class CustomInstall:
                 # with skip_contents nothing was written, so the existing title must be left alone
                 if not self.skip_contents:
                     if isdir(title_root):
-                        self.log(f'Removing original install at {title_root}...')
-                        rmtree(title_root)
+                        self.log(f'Replacing original install at {title_root}...')
 
                     makedirs(tidhigh_root, exist_ok=True)
-                    rename(temp_title_root, title_root)
+                    backup_title_root = join(self.sd, f'ci-install-old-{cia.tmd.title_id}-{randint(0, 0xFFFFFFFF):08x}')
+                    replace_title_dir(temp_title_root, title_root, backup_title_root)
 
-                cifinish_data[int(cia.tmd.title_id, 16)] = {'seed': (get_seed(cia.contents[0].program_id) if cia.contents[0].flags.uses_seed else None)}
+                cifinish_data[int(cia.tmd.title_id, 16)] = {'seed': seed}
 
                 # This is saved regardless if any titles were installed, so the file can be upgraded just in case.
                 save_cifinish(cifinish_path, cifinish_data)
