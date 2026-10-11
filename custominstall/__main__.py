@@ -15,7 +15,7 @@ from os.path import dirname, join, isdir, isfile
 from random import randint
 from hashlib import sha256
 from pprint import pformat
-from shutil import copyfile, copy2, rmtree, which
+from shutil import copyfile, copy2, disk_usage, rmtree, which
 import sys
 from sys import platform, executable
 from tempfile import TemporaryDirectory
@@ -42,11 +42,6 @@ if platform == 'msys':
     platform = 'win32'
 
 is_windows = platform == 'win32'
-
-if is_windows:
-    from ctypes import c_wchar_p, pointer, c_ulonglong, windll
-else:
-    from os import statvfs
 
 script_dir: str
 frozen = getattr(sys, 'frozen', False)
@@ -102,23 +97,7 @@ class InstallStatus(Enum):
 
 
 def get_free_space(path: 'Union[PathLike, bytes, str]'):
-    if is_windows:
-        lpSectorsPerCluster = c_ulonglong(0)
-        lpBytesPerSector = c_ulonglong(0)
-        lpNumberOfFreeClusters = c_ulonglong(0)
-        lpTotalNumberOfClusters = c_ulonglong(0)
-        ret = windll.kernel32.GetDiskFreeSpaceW(c_wchar_p(path), pointer(lpSectorsPerCluster),
-                                                pointer(lpBytesPerSector),
-                                                pointer(lpNumberOfFreeClusters),
-                                                pointer(lpTotalNumberOfClusters))
-        if not ret:
-            raise WindowsError
-        free_blocks = lpNumberOfFreeClusters.value * lpSectorsPerCluster.value
-        free_bytes = free_blocks * lpBytesPerSector.value
-    else:
-        stv = statvfs(path)
-        free_bytes = stv.f_bavail * stv.f_frsize
-    return free_bytes
+    return disk_usage(path).free
 
 
 def replace_title_dir(new_root: 'Union[PathLike, bytes, str]', title_root: 'Union[PathLike, bytes, str]',
@@ -272,10 +251,13 @@ class CustomInstall:
         hasher = sha256()
         while left > 0:
             to_read = min(READ_SIZE, left)
-            data = src.read(READ_SIZE)
+            data = src.read(to_read)
+            if not data:
+                # the input ended early, the caller's hash check will fail
+                break
             hasher.update(data)
             dst.write(cipher.encrypt(data))
-            left -= to_read
+            left -= len(data)
             total_read = size - left
             if fire_event:
                 self.event.update_percentage((total_read / size) * 100, total_read / 1048576, size / 1048576)
