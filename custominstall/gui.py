@@ -8,10 +8,11 @@
 
 from os import environ, scandir
 from os.path import abspath, basename, dirname, join, isfile
+import queue
 import sys
 from threading import Thread, Lock
 from time import strftime
-from traceback import format_exception
+from traceback import format_exception, print_exc
 import tkinter as tk
 import tkinter.ttk as ttk
 import tkinter.filedialog as fd
@@ -35,23 +36,21 @@ if TYPE_CHECKING:
 frozen = getattr(sys, 'frozen', None)
 is_windows = sys.platform == 'win32'
 taskbar = None
+file_parent = dirname(abspath(__file__))
 if is_windows:
     if frozen:
         # attempt to fix loading tcl/tk when running from a path with non-latin characters
-        tkinter_path = dirname(tk.__file__)
-        tcl_path = join(tkinter_path, 'tcl8.6')
         environ['TCL_LIBRARY'] = 'lib/tkinter/tcl8.6'
     try:
         import comtypes.client as cc
 
-        tbl = cc.GetModule('TaskbarLib.tlb')
+        tbl = cc.GetModule(join(file_parent, 'TaskbarLib.tlb'))
 
         taskbar = cc.CreateObject('{56FDF344-FD6D-11D0-958A-006097C9A090}', interface=tbl.ITaskbarList3)
         taskbar.HrInit()
-    except (ModuleNotFoundError, UnicodeEncodeError, AttributeError):
-        pass
-
-file_parent = dirname(abspath(__file__))
+    except Exception:
+        # the taskbar is optional, a COM or OS error must not stop the GUI from starting
+        taskbar = None
 
 # automatically load boot9 if it's in the current directory
 b9_paths.insert(0, join(file_parent, 'boot9.bin'))
@@ -278,6 +277,10 @@ class CustomInstallGUI(ttk.Frame):
         self.readers = {}
 
         self.lock = Lock()
+
+        # the install thread must not touch Tk, it puts calls here for the main thread to run
+        self.ui_queue = queue.Queue()
+        self.after(50, self.poll_ui_queue)
 
         self.log_messages = []
 
@@ -520,6 +523,26 @@ class CustomInstallGUI(ttk.Frame):
         if not self.b9_loaded:
             self.log('Note: boot9 was not auto-detected. Please choose it before adding any titles.')
 
+    def call_on_main(self, func):
+        """Returns a version of func that can be called from any thread, and runs on the main thread."""
+        def wrapper(*args, **kwargs):
+            self.ui_queue.put((func, args, kwargs))
+
+        return wrapper
+
+    def poll_ui_queue(self):
+        # schedule the next poll first, so a call that opens a dialog does not stop the polling
+        self.after(50, self.poll_ui_queue)
+        while True:
+            try:
+                func, args, kwargs = self.ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                func(*args, **kwargs)
+            except Exception:
+                print_exc()
+
     def sort_treeview(self):
         l = [(self.treeview.set(k, 'titlename'), k) for k in self.treeview.get_children()]
         # sort by title name
@@ -657,10 +680,15 @@ class CustomInstallGUI(ttk.Frame):
         if taskbar:
             taskbar.SetProgressState(self.hwnd, tbl.TBPF_NORMAL)
 
-        installer = CustomInstall(movable=movable_sed,
-                                  sd=sd_root,
-                                  skip_contents=self.skip_contents_var.get() == 1,
-                                  overwrite_saves=self.overwrite_saves_var.get() == 1)
+        try:
+            installer = CustomInstall(movable=movable_sed,
+                                      sd=sd_root,
+                                      skip_contents=self.skip_contents_var.get() == 1,
+                                      overwrite_saves=self.overwrite_saves_var.get() == 1)
+        except Exception as e:
+            self.show_error(f'Could not start the install: {type(e).__name__}: {e}')
+            self.enable_buttons()
+            return
 
         if not installer.check_for_id0():
             self.show_error(f'id0 {installer.crypto.id0.hex()} was not found inside "Nintendo 3DS" on the SD card.\n'
@@ -668,6 +696,7 @@ class CustomInstallGUI(ttk.Frame):
                             f'Before using custom-install, you should use this SD card on the appropriate console.\n'
                             f'\n'
                             f'Otherwise, make sure the correct movable.sed is being used.')
+            self.enable_buttons()
             return
 
         self.log('Starting install...')
@@ -708,14 +737,20 @@ class CustomInstallGUI(ttk.Frame):
             if taskbar:
                 taskbar.SetProgressValue(self.hwnd, finished_percent, max_percentage)
 
-        installer.event.on_log_msg += ci_on_log_msg
-        installer.event.update_percentage += ci_update_percentage
-        installer.event.on_error += ci_on_error
-        installer.event.on_cia_start += ci_on_cia_start
-        installer.event.update_status += self.update_status
+        # these are fired from the install thread, so they are run on the main thread
+        installer.event.on_log_msg += self.call_on_main(ci_on_log_msg)
+        installer.event.update_percentage += self.call_on_main(ci_update_percentage)
+        installer.event.on_error += self.call_on_main(ci_on_error)
+        installer.event.on_cia_start += self.call_on_main(ci_on_cia_start)
+        installer.event.update_status += self.call_on_main(self.update_status)
 
         if self.skip_contents_var.get() != 1:
-            total_size, free_space = installer.check_size()
+            try:
+                total_size, free_space = installer.check_size()
+            except Exception as e:
+                self.show_error(f'Could not check the free space on the SD card: {type(e).__name__}: {e}')
+                self.enable_buttons()
+                return
             if total_size > free_space:
                 self.show_error(f'Not enough free space.\n'
                                 f'Combined title install size: {total_size / (1024 * 1024):0.2f} MiB\n'
@@ -723,30 +758,34 @@ class CustomInstallGUI(ttk.Frame):
                 self.enable_buttons()
                 return
 
+        def show_results(result, copied_3dsx, application_count):
+            result_window = InstallResults(self.parent,
+                                           install_state=result,
+                                           copied_3dsx=copied_3dsx,
+                                           application_count=application_count)
+            result_window.focus()
+
         def install():
+            # this runs in a separate thread, anything that touches Tk goes through call_on_main
             try:
                 result, copied_3dsx, application_count = installer.start()
                 if result:
-                    result_window = InstallResults(self.parent,
-                                                   install_state=result,
-                                                   copied_3dsx=copied_3dsx,
-                                                   application_count=application_count)
-                    result_window.focus()
+                    self.call_on_main(show_results)(result, copied_3dsx, application_count)
                 elif result is None:
-                    self.show_error("An error occurred when trying to run save3ds_fuse.\n"
-                                    "Either title.db doesn't exist, or save3ds_fuse couldn't be run.")
-                    self.open_console()
+                    self.call_on_main(self.show_error)("An error occurred when trying to run save3ds_fuse.\n"
+                                                       "Either title.db doesn't exist, or save3ds_fuse couldn't be run.")
+                    self.call_on_main(self.open_console)()
             except:
                 installer.event.on_error(sys.exc_info())
             finally:
-                self.enable_buttons()
+                self.call_on_main(self.enable_buttons)()
 
         Thread(target=install).start()
 
 
 def main():
     if not (save3ds_fuse_path and isfile(save3ds_fuse_path)):
-        mb.showerror('Error', "Couldn't find save3ds_fuse. Please place it PATH.")
+        mb.showerror('Error', "Couldn't find save3ds_fuse. Please put it in your PATH or set CUSTOM_INSTALL_SAVE3DS_PATH.")
         return
 
     window = tk.Tk()
