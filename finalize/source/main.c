@@ -45,6 +45,9 @@ struct finish_db_entry_v3 {
 	u8 seed[0x10];
 };
 
+_Static_assert(sizeof(struct finish_db_header) == 0x10, "unexpected cifinish header size");
+_Static_assert(sizeof(struct finish_db_entry_v3) == 0x20, "unexpected cifinish v3 entry size");
+
 // 0x350
 struct ticket_dumb {
 	u8 unused1[0x1DC];
@@ -57,6 +60,7 @@ struct finish_db_entry_final {
 	bool has_seed;
 	u64 title_id;
 	u8 seed[0x10];
+	bool failed; // set while finalizing, not stored in the file
 };
 
 // from FBI:
@@ -89,6 +93,8 @@ int load_cifinish(char* path, struct finish_db_entry_final **entries)
 
 	int i;
 	size_t read;
+	long file_size;
+	size_t entry_size;
 
 	printf("Reading %s...\n", path);
 	fp = fopen(path, "rb");
@@ -98,7 +104,20 @@ int load_cifinish(char* path, struct finish_db_entry_final **entries)
 		return -1;
 	}
 
-	fread(&header, sizeof(header), 1, fp);
+	// the size is used to check the title count before allocating
+	if (fseek(fp, 0, SEEK_END) != 0 || (file_size = ftell(fp)) < 0 || fseek(fp, 0, SEEK_SET) != 0)
+	{
+		printf("Couldn't get the file size.\n");
+		goto fail;
+	}
+
+	read = fread(&header, sizeof(header), 1, fp);
+	if (read != 1)
+	{
+		printf("Couldn't read the header.\n");
+		printf("  Is the file corrupt?\n");
+		goto fail;
+	}
 
 	if (memcmp(header.magic, "CIFINISH", 8))
 	{
@@ -112,6 +131,26 @@ int load_cifinish(char* path, struct finish_db_entry_final **entries)
 	{
 		printf("This version of custom-install-finalize is\n");
 		printf("  too old. Please update to a new release.\n");
+		goto fail;
+	}
+
+	if (header.version == 0)
+	{
+		printf("Unknown CIFINISH version.\n");
+		goto fail;
+	}
+
+	if (header.version == 1)
+		entry_size = sizeof(struct finish_db_entry_v1);
+	else if (header.version == 2)
+		entry_size = sizeof(struct finish_db_entry_v2);
+	else
+		entry_size = sizeof(struct finish_db_entry_v3);
+
+	if (header.title_count > (file_size - sizeof(header)) / entry_size)
+	{
+		printf("The title count doesn't fit in the file.\n");
+		printf("  Is the file corrupt?\n");
 		goto fail;
 	}
 
@@ -222,6 +261,54 @@ Result check_title_exist(u64 title_id, u64 *ticket_ids, u32 ticket_ids_length,  
 	return ret;
 }
 
+// rewrites the file (version 3) with only the entries that failed
+int save_failed_cifinish(char* path, struct finish_db_entry_final *entries, int title_count, u32 failed_count)
+{
+	FILE *fp;
+	struct finish_db_header header;
+	struct finish_db_entry_v3 v3;
+
+	fp = fopen(path, "wb");
+	if (!fp)
+	{
+		printf("Failed to open %s for writing.\n", path);
+		return -1;
+	}
+
+	memset(&header, 0, sizeof(header));
+	memcpy(header.magic, "CIFINISH", 8);
+	header.version = 3;
+	header.title_count = failed_count;
+	if (fwrite(&header, sizeof(header), 1, fp) != 1)
+		goto fail;
+
+	for (int i = 0; i < title_count; i++)
+	{
+		if (!entries[i].failed)
+			continue;
+
+		memset(&v3, 0, sizeof(v3));
+		memcpy(v3.magic, "TITLE", 6);
+		v3.has_seed = entries[i].has_seed;
+		v3.title_id = entries[i].title_id;
+		memcpy(v3.seed, entries[i].seed, 16);
+		if (fwrite(&v3, sizeof(v3), 1, fp) != 1)
+			goto fail;
+	}
+
+	if (fclose(fp) != 0)
+	{
+		printf("Failed to write %s.\n", path);
+		return -1;
+	}
+	return 0;
+
+fail:
+	printf("Failed to write %s.\n", path);
+	fclose(fp);
+	return -1;
+}
+
 void finalize_install(void)
 {
 	Result res;
@@ -287,6 +374,17 @@ void finalize_install(void)
 		if (R_SUCCEEDED(exist_res))
 		{
 			printf("No need to finalize %016llx, skipping...\n", entries[i].title_id);
+
+			if (entries[i].has_seed)
+			{
+				// the seed may have failed on an earlier run, so it is tried again
+				// this is not counted as a failure, since an error here may only mean the seed is already there
+				res = FSUSER_AddSeed(entries[i].title_id, entries[i].seed);
+				if (R_FAILED(res))
+				{
+					printf("Couldn't add seed (it may already exist): %08lx\n", res);
+				}
+			}
 			continue;
 		}
 
@@ -298,8 +396,9 @@ void finalize_install(void)
 		if (R_FAILED(res))
 		{
 			printf("Failed to begin ticket install: %08lx\n", res);
-			AMNET_InstallTicketAbort(ticketHandle);
-			goto exit;
+			// no abort here, there is no open ticket handle
+			entries[i].failed = true;
+			continue;
 		}
 
 		res = FSFILE_Write(ticketHandle, NULL, 0, &ticket_buf, sizeof(struct ticket_dumb), 0);
@@ -307,7 +406,8 @@ void finalize_install(void)
 		{
 			printf("Failed to write ticket: %08lx\n", res);
 			AMNET_InstallTicketAbort(ticketHandle);
-			goto exit;
+			entries[i].failed = true;
+			continue;
 		}
 
 		res = AMNET_InstallTicketFinish(ticketHandle);
@@ -315,7 +415,8 @@ void finalize_install(void)
 		{
 			printf("Failed to finish ticket install: %08lx\n", res);
 			AMNET_InstallTicketAbort(ticketHandle);
-			goto exit;
+			entries[i].failed = true;
+			continue;
 		}
 
 		if (entries[i].has_seed)
@@ -324,13 +425,39 @@ void finalize_install(void)
 			if (R_FAILED(res))
 			{
 				printf("Failed to install seed: %08lx\n", res);
+				entries[i].failed = true;
 				continue;
 			}
 		}
 	}
 
-	printf("Deleting %s...\n", CIFINISH_PATH);
-	unlink(CIFINISH_PATH);
+	u32 failed_count = 0;
+	for (int i = 0; i < title_count; ++i)
+	{
+		if (entries[i].failed)
+			failed_count++;
+	}
+
+	if (failed_count == 0)
+	{
+		printf("Deleting %s...\n", CIFINISH_PATH);
+		unlink(CIFINISH_PATH);
+	}
+	else if (save_failed_cifinish(CIFINISH_PATH, entries, title_count, failed_count) == 0)
+	{
+		printf("\n%lu title(s) failed and are kept in %s.\n", failed_count, CIFINISH_PATH);
+		printf("Run custom-install-finalize again to retry them.\n");
+	}
+	else
+	{
+		printf("\n%s may be damaged.\n", CIFINISH_PATH);
+		printf("Delete it, then install these titles\nagain with custom-install:\n");
+		for (int i = 0; i < title_count; ++i)
+		{
+			if (entries[i].failed)
+				printf("  %016llx\n", entries[i].title_id);
+		}
+	}
 
 	exit:
 
@@ -346,7 +473,7 @@ int main(int argc, char* argv[])
 	gfxInitDefault();
 	consoleInit(GFX_TOP, NULL);
 
-	printf("custom-install-finalize v1.6\n");
+	printf("custom-install-finalize v1.7\n");
 
 	finalize_install();
 	// print this at the end in case it gets pushed off the screen
