@@ -10,7 +10,7 @@ from argparse import ArgumentParser
 from enum import Enum
 from glob import glob
 import gzip
-from os import makedirs, rename, scandir, environ
+from os import makedirs, remove, rename, scandir, environ
 from os.path import dirname, join, isdir, isfile
 from random import randint
 from hashlib import sha256
@@ -25,7 +25,7 @@ import subprocess
 
 if TYPE_CHECKING:
     from os import PathLike
-    from typing import List, Union, Tuple
+    from typing import List, Optional, Union, Tuple
 
 from events import Events
 
@@ -140,6 +140,18 @@ def replace_title_dir(new_root: 'Union[PathLike, bytes, str]', title_root: 'Unio
         raise
     if had_old:
         rmtree(backup_root, ignore_errors=True)
+
+
+def restore_info_entry(entry_path: 'Union[PathLike, bytes, str]', old_data: 'Optional[bytes]'):
+    """Puts a title info entry in the save3ds_fuse directory back as it was before this title touched it."""
+    if old_data is not None:
+        with open(entry_path, 'wb') as o:
+            o.write(old_data)
+    else:
+        try:
+            remove(entry_path)
+        except FileNotFoundError:
+            pass
 
 
 def load_cifinish(path: 'Union[PathLike, bytes, str]'):
@@ -439,247 +451,293 @@ class CustomInstall:
                 self.event.on_cia_start(idx)
                 self.event.update_status(path, InstallStatus.Starting)
 
-                # looked up now so a missing seed stops this title before anything is written
-                if cia.contents[0].flags.uses_seed:
-                    seed = get_seed(cia.contents[0].program_id)
-                else:
-                    seed = None
-
                 temp_title_root = join(self.sd, f'ci-install-temp-{cia.tmd.title_id}-{randint(0, 0xFFFFFFFF):08x}')
-                if not self.skip_contents:
-                    makedirs(temp_title_root, exist_ok=True)
-
-                tid_parts = (cia.tmd.title_id[0:8], cia.tmd.title_id[8:16])
 
                 try:
                     display_title = f'{cia.contents[0].exefs.icon.get_app_title().short_desc} - {cia.tmd.title_id}'
                 except:
                     display_title = cia.tmd.title_id
-                self.log(f'Installing {display_title}...')
 
-                title_size = get_install_size(cia)
+                # set once this title's entry is written into the save3ds_fuse directory
+                info_entry_path = None
+                old_info_entry = None
 
-                # checks if this is dlc, which has some differences
-                is_dlc = tid_parts[0] == '0004008c'
-
-                # this checks if it has a manual (index 1) and is not DLC
-                has_manual = (not is_dlc) and (1 in cia.contents)
-
-                # this gets the extdata id from the extheader, stored in the storage info area
                 try:
-                    with cia.contents[0].open_raw_section(NCCHSection.ExtendedHeader) as e:
-                        e.seek(0x200 + 0x30)
-                        extdata_id = e.read(8)
-                except KeyError:
-                    # not an executable title
-                    extdata_id = b'\0' * 8
+                    # looked up now so a missing seed stops this title before anything is written
+                    if cia.contents[0].flags.uses_seed:
+                        seed = get_seed(cia.contents[0].program_id)
+                    else:
+                        seed = None
 
-                # cmd content id, starts with 1 for non-dlc contents
-                cmd_id = len(cia.content_info) if is_dlc else 1
-                cmd_filename = f'{cmd_id:08x}.cmd'
+                    if not self.skip_contents:
+                        makedirs(temp_title_root, exist_ok=True)
 
-                # this is where the final directory will be moved
-                tidhigh_root = join(sd_path, 'title', tid_parts[0])
+                    tid_parts = (cia.tmd.title_id[0:8], cia.tmd.title_id[8:16])
 
-                # get the title root where all the contents will be
-                title_root = join(sd_path, 'title', *tid_parts)
-                content_root = join(title_root, 'content')
-                # generate the path used for the IV
-                title_root_cmd = f'/title/{"/".join(tid_parts)}'
-                content_root_cmd = title_root_cmd + '/content'
+                    self.log(f'Installing {display_title}...')
 
-                temp_content_root = join(temp_title_root, 'content')
+                    title_size = get_install_size(cia)
 
-                if not self.skip_contents:
-                    self.event.update_status(path, InstallStatus.Writing)
-                    makedirs(join(temp_content_root, 'cmd'), exist_ok=True)
-                    if cia.tmd.save_size:
-                        makedirs(join(temp_title_root, 'data'), exist_ok=True)
-                    if is_dlc:
-                        # create the separate directories for every 256 contents
-                        for x in range(((len(cia.content_info) - 1) // 256) + 1):
-                            makedirs(join(temp_content_root, f'{x:08x}'), exist_ok=True)
+                    # checks if this is dlc, which has some differences
+                    is_dlc = tid_parts[0] == '0004008c'
 
-                    # maybe this will be changed in the future
-                    tmd_id = 0
+                    # this checks if it has a manual (index 1) and is not DLC
+                    has_manual = (not is_dlc) and (1 in cia.contents)
 
-                    tmd_filename = f'{tmd_id:08x}.tmd'
+                    # this gets the extdata id from the extheader, stored in the storage info area
+                    try:
+                        with cia.contents[0].open_raw_section(NCCHSection.ExtendedHeader) as e:
+                            e.seek(0x200 + 0x30)
+                            extdata_id = e.read(8)
+                    except KeyError:
+                        # not an executable title
+                        extdata_id = b'\0' * 8
 
-                    # write the tmd
-                    tmd_enc_path = content_root_cmd + '/' + tmd_filename
-                    self.log(f'Writing {tmd_enc_path}...')
-                    with open(join(temp_content_root, tmd_filename), 'wb') as o:
-                        with self.crypto.create_ctr_io(Keyslot.SD, o, self.crypto.sd_path_to_iv(tmd_enc_path)) as e:
-                            e.write(bytes(cia.tmd))
+                    # cmd content id, starts with 1 for non-dlc contents
+                    cmd_id = len(cia.content_info) if is_dlc else 1
+                    cmd_filename = f'{cmd_id:08x}.cmd'
 
-                    # in case the contents are corrupted
-                    do_continue = False
-                    # write each content
-                    for co in cia.content_info:
-                        content_filename = co.id + '.app'
+                    # this is where the final directory will be moved
+                    tidhigh_root = join(sd_path, 'title', tid_parts[0])
+
+                    # get the title root where all the contents will be
+                    title_root = join(sd_path, 'title', *tid_parts)
+                    content_root = join(title_root, 'content')
+                    # generate the path used for the IV
+                    title_root_cmd = f'/title/{"/".join(tid_parts)}'
+                    content_root_cmd = title_root_cmd + '/content'
+
+                    temp_content_root = join(temp_title_root, 'content')
+
+                    if not self.skip_contents:
+                        self.event.update_status(path, InstallStatus.Writing)
+                        makedirs(join(temp_content_root, 'cmd'), exist_ok=True)
+                        if cia.tmd.save_size:
+                            makedirs(join(temp_title_root, 'data'), exist_ok=True)
                         if is_dlc:
-                            dir_index = format((co.cindex // 256), '08x')
-                            content_enc_path = content_root_cmd + f'/{dir_index}/{content_filename}'
-                            content_out_path = join(temp_content_root, dir_index, content_filename)
-                        else:
-                            content_enc_path = content_root_cmd + '/' + content_filename
-                            content_out_path = join(temp_content_root, content_filename)
-                        self.log(f'Writing {content_enc_path}...')
-                        with cia.open_raw_section(co.cindex) as s, open(content_out_path, 'wb') as o:
-                            result_hash = self.copy_with_progress(s, o, co.size, content_enc_path)
-                        if result_hash != co.hash:
-                            self.log(f'WARNING: Hash does not match for {content_enc_path}!')
-                            install_state['failed'].append(display_title)
-                            rename(temp_title_root, temp_title_root + '-corrupted')
-                            do_continue = True
-                            self.event.update_status(path, InstallStatus.Failed)
-                            break
+                            # create the separate directories for every 256 contents
+                            for x in range(((len(cia.content_info) - 1) // 256) + 1):
+                                makedirs(join(temp_content_root, f'{x:08x}'), exist_ok=True)
 
-                    if do_continue:
-                        continue
+                        # maybe this will be changed in the future
+                        tmd_id = 0
 
-                    # generate a blank save
-                    if cia.tmd.save_size:
-                        sav_enc_path = title_root_cmd + '/data/00000001.sav'
-                        tmp_sav_out_path = join(temp_title_root, 'data', '00000001.sav')
-                        sav_out_path = join(title_root, 'data', '00000001.sav')
-                        if self.overwrite_saves or not isfile(sav_out_path):
-                            cipher = crypto.create_ctr_cipher(Keyslot.SD, crypto.sd_path_to_iv(sav_enc_path))
-                            # in a new save, the first 0x20 are all 00s. the rest can be random
-                            data = cipher.encrypt(b'\0' * 0x20)
-                            self.log(f'Generating blank save at {sav_enc_path}...')
-                            with open(tmp_sav_out_path, 'wb') as o:
-                                o.write(data)
-                                o.write(b'\0' * (cia.tmd.save_size - 0x20))
-                        else:
-                            self.log(f'Copying original save file from {sav_enc_path}...')
-                            copy2(sav_out_path, tmp_sav_out_path)
+                        tmd_filename = f'{tmd_id:08x}.tmd'
 
-                    # generate and write cmd
-                    cmd_enc_path = content_root_cmd + '/cmd/' + cmd_filename
-                    cmd_out_path = join(temp_content_root, 'cmd', cmd_filename)
-                    self.log(f'Generating {cmd_enc_path}')
-                    highest_index = 0
-                    content_ids = {}
+                        # write the tmd
+                        tmd_enc_path = content_root_cmd + '/' + tmd_filename
+                        self.log(f'Writing {tmd_enc_path}...')
+                        with open(join(temp_content_root, tmd_filename), 'wb') as o:
+                            with self.crypto.create_ctr_io(Keyslot.SD, o, self.crypto.sd_path_to_iv(tmd_enc_path)) as e:
+                                e.write(bytes(cia.tmd))
 
-                    for record in cia.content_info:
-                        highest_index = record.cindex
-                        with cia.open_raw_section(record.cindex) as s:
-                            s.seek(0x100)
-                            cmac_data = s.read(0x100)
+                        # in case the contents are corrupted
+                        do_continue = False
+                        # write each content
+                        for co in cia.content_info:
+                            content_filename = co.id + '.app'
+                            if is_dlc:
+                                dir_index = format((co.cindex // 256), '08x')
+                                content_enc_path = content_root_cmd + f'/{dir_index}/{content_filename}'
+                                content_out_path = join(temp_content_root, dir_index, content_filename)
+                            else:
+                                content_enc_path = content_root_cmd + '/' + content_filename
+                                content_out_path = join(temp_content_root, content_filename)
+                            self.log(f'Writing {content_enc_path}...')
+                            with cia.open_raw_section(co.cindex) as s, open(content_out_path, 'wb') as o:
+                                result_hash = self.copy_with_progress(s, o, co.size, content_enc_path)
+                            if result_hash != co.hash:
+                                self.log(f'WARNING: Hash does not match for {content_enc_path}!')
+                                install_state['failed'].append(display_title)
+                                rename(temp_title_root, temp_title_root + '-corrupted')
+                                do_continue = True
+                                self.event.update_status(path, InstallStatus.Failed)
+                                break
 
-                        id_bytes = bytes.fromhex(record.id)[::-1]
-                        cmac_data += record.cindex.to_bytes(4, 'little') + id_bytes
+                        if do_continue:
+                            continue
 
-                        cmac_ncch = crypto.create_cmac_object(Keyslot.CMACSDNAND)
-                        cmac_ncch.update(sha256(cmac_data).digest())
-                        content_ids[record.cindex] = (id_bytes, cmac_ncch.digest())
+                        # generate a blank save
+                        if cia.tmd.save_size:
+                            sav_enc_path = title_root_cmd + '/data/00000001.sav'
+                            tmp_sav_out_path = join(temp_title_root, 'data', '00000001.sav')
+                            sav_out_path = join(title_root, 'data', '00000001.sav')
+                            if self.overwrite_saves or not isfile(sav_out_path):
+                                cipher = crypto.create_ctr_cipher(Keyslot.SD, crypto.sd_path_to_iv(sav_enc_path))
+                                # in a new save, the first 0x20 are all 00s. the rest can be random
+                                data = cipher.encrypt(b'\0' * 0x20)
+                                self.log(f'Generating blank save at {sav_enc_path}...')
+                                with open(tmp_sav_out_path, 'wb') as o:
+                                    o.write(data)
+                                    o.write(b'\0' * (cia.tmd.save_size - 0x20))
+                            else:
+                                self.log(f'Copying original save file from {sav_enc_path}...')
+                                copy2(sav_out_path, tmp_sav_out_path)
 
-                    # add content IDs up to the last one
-                    ids_by_index = [CMD_MISSING] * (highest_index + 1)
-                    installed_ids = []
-                    cmacs = []
-                    for x in range(len(ids_by_index)):
+                        # generate and write cmd
+                        cmd_enc_path = content_root_cmd + '/cmd/' + cmd_filename
+                        cmd_out_path = join(temp_content_root, 'cmd', cmd_filename)
+                        self.log(f'Generating {cmd_enc_path}')
+                        highest_index = 0
+                        content_ids = {}
+
+                        for record in cia.content_info:
+                            highest_index = record.cindex
+                            with cia.open_raw_section(record.cindex) as s:
+                                s.seek(0x100)
+                                cmac_data = s.read(0x100)
+
+                            id_bytes = bytes.fromhex(record.id)[::-1]
+                            cmac_data += record.cindex.to_bytes(4, 'little') + id_bytes
+
+                            cmac_ncch = crypto.create_cmac_object(Keyslot.CMACSDNAND)
+                            cmac_ncch.update(sha256(cmac_data).digest())
+                            content_ids[record.cindex] = (id_bytes, cmac_ncch.digest())
+
+                        # add content IDs up to the last one
+                        ids_by_index = [CMD_MISSING] * (highest_index + 1)
+                        installed_ids = []
+                        cmacs = []
+                        for x in range(len(ids_by_index)):
+                            try:
+                                info = content_ids[x]
+                            except KeyError:
+                                # "MISSING CONTENT!"
+                                # The 3DS does generate a cmac for missing contents, but I don't know how it works.
+                                # It doesn't matter anyway, the title seems to be fully functional.
+                                cmacs.append(bytes.fromhex('4D495353494E4720434F4E54454E5421'))
+                            else:
+                                ids_by_index[x] = info[0]
+                                cmacs.append(info[1])
+                                installed_ids.append(info[0])
+                        installed_ids.sort(key=lambda x: int.from_bytes(x, 'little'))
+
+                        final = (cmd_id.to_bytes(4, 'little')
+                                 + len(ids_by_index).to_bytes(4, 'little')
+                                 + len(installed_ids).to_bytes(4, 'little')
+                                 + (1).to_bytes(4, 'little'))
+                        cmac_cmd_header = crypto.create_cmac_object(Keyslot.CMACSDNAND)
+                        cmac_cmd_header.update(final)
+                        final += cmac_cmd_header.digest()
+
+                        final += b''.join(ids_by_index)
+                        final += b''.join(installed_ids)
+                        final += b''.join(cmacs)
+
+                        cipher = crypto.create_ctr_cipher(Keyslot.SD, crypto.sd_path_to_iv(cmd_enc_path))
+                        self.log(f'Writing {cmd_enc_path}')
+                        with open(cmd_out_path, 'wb') as o:
+                            o.write(cipher.encrypt(final))
+
+                    # this starts building the title info entry
+                    title_info_entry_data = [
+                        # title size
+                        title_size.to_bytes(8, 'little'),
+                        # title type, seems to usually be 0x40
+                        0x40.to_bytes(4, 'little'),
+                        # title version
+                        int(cia.tmd.title_version).to_bytes(2, 'little'),
+                        # ncch version
+                        cia.contents[0].version.to_bytes(2, 'little'),
+                        # flags_0, only checking if there is a manual
+                        (1 if has_manual else 0).to_bytes(4, 'little'),
+                        # tmd content id, always starting with 0
+                        (0).to_bytes(4, 'little'),
+                        # cmd content id
+                        cmd_id.to_bytes(4, 'little'),
+                        # flags_1, only checking save data
+                        (1 if cia.tmd.save_size else 0).to_bytes(4, 'little'),
+                        # extdataid low
+                        extdata_id[0:4],
+                        # reserved
+                        b'\0' * 4,
+                        # flags_2, only using a common value
+                        0x100000000.to_bytes(8, 'little'),
+                        # product code
+                        cia.contents[0].product_code.encode('ascii').ljust(0x10, b'\0'),
+                        # reserved
+                        b'\0' * 0x10,
+                        # unknown
+                        randint(0, 0xFFFFFFFF).to_bytes(4, 'little'),
+                        # reserved
+                        b'\0' * 0x2c
+                    ]
+
+                    self.event.update_status(path, InstallStatus.Finishing)
+                    # with skip_contents nothing was written, so the existing title must be left alone
+                    if not self.skip_contents:
+                        if isdir(title_root):
+                            self.log(f'Replacing original install at {title_root}...')
+
+                        makedirs(tidhigh_root, exist_ok=True)
+                        backup_title_root = join(self.sd, f'ci-install-old-{cia.tmd.title_id}-{randint(0, 0xFFFFFFFF):08x}')
+                        replace_title_dir(temp_title_root, title_root, backup_title_root)
+
+                    cifinish_data[int(cia.tmd.title_id, 16)] = {'seed': seed}
+
+                    # This is saved regardless if any titles were installed, so the file can be upgraded just in case.
+                    save_cifinish(cifinish_path, cifinish_data)
+
+                    # an update or reinstall already has an entry here, which has to survive if this import fails
+                    entry_path = join(tempdir, cia.tmd.title_id)
+                    try:
+                        with open(entry_path, 'rb') as o:
+                            old_info_entry = o.read()
+                    except FileNotFoundError:
+                        pass
+                    # only set once the old entry is known, so a failed read can't lead to it being removed
+                    info_entry_path = entry_path
+                    with open(info_entry_path, 'wb') as o:
+                        o.write(b''.join(title_info_entry_data))
+
+                    # import the directory, now including our title
+                    self.log('Importing into Title Database...')
+                    out = subprocess.run(save3ds_fuse_common_args + ['-i'],
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT,
+                                         encoding='utf-8',
+                                         **extra_kwargs)
+                    if out.returncode:
+                        for l in out.stdout.split('\n'):
+                            self.log(l)
+                        self.log('Command line:')
+                        for l in pformat(out.args).split('\n'):
+                            self.log(l)
+                        install_state['failed'].append(display_title)
+                        self.event.update_status(path, InstallStatus.Failed)
+                        # keep this entry out of the next title's import
+                        restore_info_entry(info_entry_path, old_info_entry)
+                        info_entry_path = None
+                        if not self.skip_contents:
+                            self.log('The title contents were written, but adding the title to the database failed.')
+                            self.log('Once save3ds_fuse works, run the same command again with --skip-contents '
+                                     'to add the entry.')
+                    else:
+                        # the entry is final now, the except block must not touch it
+                        info_entry_path = None
+                        install_state['installed'].append(display_title)
+                        self.event.update_status(path, InstallStatus.Done)
+                except Exception:
+                    # clean up first, so nothing below (including event handlers) can skip it
+                    if info_entry_path:
                         try:
-                            info = content_ids[x]
-                        except KeyError:
-                            # "MISSING CONTENT!"
-                            # The 3DS does generate a cmac for missing contents, but I don't know how it works.
-                            # It doesn't matter anyway, the title seems to be fully functional.
-                            cmacs.append(bytes.fromhex('4D495353494E4720434F4E54454E5421'))
-                        else:
-                            ids_by_index[x] = info[0]
-                            cmacs.append(info[1])
-                            installed_ids.append(info[0])
-                    installed_ids.sort(key=lambda x: int.from_bytes(x, 'little'))
-
-                    final = (cmd_id.to_bytes(4, 'little')
-                             + len(ids_by_index).to_bytes(4, 'little')
-                             + len(installed_ids).to_bytes(4, 'little')
-                             + (1).to_bytes(4, 'little'))
-                    cmac_cmd_header = crypto.create_cmac_object(Keyslot.CMACSDNAND)
-                    cmac_cmd_header.update(final)
-                    final += cmac_cmd_header.digest()
-
-                    final += b''.join(ids_by_index)
-                    final += b''.join(installed_ids)
-                    final += b''.join(cmacs)
-
-                    cipher = crypto.create_ctr_cipher(Keyslot.SD, crypto.sd_path_to_iv(cmd_enc_path))
-                    self.log(f'Writing {cmd_enc_path}')
-                    with open(cmd_out_path, 'wb') as o:
-                        o.write(cipher.encrypt(final))
-
-                # this starts building the title info entry
-                title_info_entry_data = [
-                    # title size
-                    title_size.to_bytes(8, 'little'),
-                    # title type, seems to usually be 0x40
-                    0x40.to_bytes(4, 'little'),
-                    # title version
-                    int(cia.tmd.title_version).to_bytes(2, 'little'),
-                    # ncch version
-                    cia.contents[0].version.to_bytes(2, 'little'),
-                    # flags_0, only checking if there is a manual
-                    (1 if has_manual else 0).to_bytes(4, 'little'),
-                    # tmd content id, always starting with 0
-                    (0).to_bytes(4, 'little'),
-                    # cmd content id
-                    cmd_id.to_bytes(4, 'little'),
-                    # flags_1, only checking save data
-                    (1 if cia.tmd.save_size else 0).to_bytes(4, 'little'),
-                    # extdataid low
-                    extdata_id[0:4],
-                    # reserved
-                    b'\0' * 4,
-                    # flags_2, only using a common value
-                    0x100000000.to_bytes(8, 'little'),
-                    # product code
-                    cia.contents[0].product_code.encode('ascii').ljust(0x10, b'\0'),
-                    # reserved
-                    b'\0' * 0x10,
-                    # unknown
-                    randint(0, 0xFFFFFFFF).to_bytes(4, 'little'),
-                    # reserved
-                    b'\0' * 0x2c
-                ]
-
-                self.event.update_status(path, InstallStatus.Finishing)
-                # with skip_contents nothing was written, so the existing title must be left alone
-                if not self.skip_contents:
-                    if isdir(title_root):
-                        self.log(f'Replacing original install at {title_root}...')
-
-                    makedirs(tidhigh_root, exist_ok=True)
-                    backup_title_root = join(self.sd, f'ci-install-old-{cia.tmd.title_id}-{randint(0, 0xFFFFFFFF):08x}')
-                    replace_title_dir(temp_title_root, title_root, backup_title_root)
-
-                cifinish_data[int(cia.tmd.title_id, 16)] = {'seed': seed}
-
-                # This is saved regardless if any titles were installed, so the file can be upgraded just in case.
-                save_cifinish(cifinish_path, cifinish_data)
-
-                with open(join(tempdir, cia.tmd.title_id), 'wb') as o:
-                    o.write(b''.join(title_info_entry_data))
-
-                # import the directory, now including our title
-                self.log('Importing into Title Database...')
-                out = subprocess.run(save3ds_fuse_common_args + ['-i'],
-                                     stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT,
-                                     encoding='utf-8',
-                                     **extra_kwargs)
-                if out.returncode:
-                    for l in out.stdout.split('\n'):
-                        self.log(l)
-                    self.log('Command line:')
-                    for l in pformat(out.args).split('\n'):
-                        self.log(l)
-                    install_state['failed'].append(display_title)
+                            restore_info_entry(info_entry_path, old_info_entry)
+                        except OSError as e:
+                            self.log(f'Could not restore the previous title database entry for '
+                                     f'{cia.tmd.title_id}, a later import may write a damaged one: {e}', 2)
+                    # only the temporary folder is removed, an existing install is never touched here
+                    if isdir(temp_title_root):
+                        rmtree(temp_title_root, ignore_errors=True)
+                    for line in format_exception(*sys.exc_info()):
+                        for line2 in line.split('\n')[:-1]:
+                            self.log(line2)
+                    if display_title in install_state['installed']:
+                        # the title was installed, only something after that (like an event handler) failed
+                        continue
+                    self.log(f'Failed to install {display_title}, continuing with the next title.', 2)
+                    if display_title not in install_state['failed']:
+                        install_state['failed'].append(display_title)
                     self.event.update_status(path, InstallStatus.Failed)
-                else:
-                    install_state['installed'].append(display_title)
-                    self.event.update_status(path, InstallStatus.Done)
 
             copied = False
             # launchable applications, not DLC or update data
