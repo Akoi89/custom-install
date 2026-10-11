@@ -401,7 +401,8 @@ class CustomInstall:
                 self.event.update_status(path, InstallStatus.Starting)
 
                 temp_title_root = join(self.sd, f'ci-install-temp-{cia.tmd.title_id}-{randint(0, 0xFFFFFFFF):08x}')
-                makedirs(temp_title_root, exist_ok=True)
+                if not self.skip_contents:
+                    makedirs(temp_title_root, exist_ok=True)
 
                 tid_parts = (cia.tmd.title_id[0:8], cia.tmd.title_id[8:16])
 
@@ -599,12 +600,14 @@ class CustomInstall:
                 ]
 
                 self.event.update_status(path, InstallStatus.Finishing)
-                if isdir(title_root):
-                    self.log(f'Removing original install at {title_root}...')
-                    rmtree(title_root)
+                # with skip_contents nothing was written, so the existing title must be left alone
+                if not self.skip_contents:
+                    if isdir(title_root):
+                        self.log(f'Removing original install at {title_root}...')
+                        rmtree(title_root)
 
-                makedirs(tidhigh_root, exist_ok=True)
-                rename(temp_title_root, title_root)
+                    makedirs(tidhigh_root, exist_ok=True)
+                    rename(temp_title_root, title_root)
 
                 cifinish_data[int(cia.tmd.title_id, 16)] = {'seed': (get_seed(cia.contents[0].program_id) if cia.contents[0].flags.uses_seed else None)}
 
