@@ -347,7 +347,9 @@ class CustomInstall:
                      'A ci-install-old folder may be the only copy of a title.', 1)
 
         if not (save3ds_fuse_path and isfile(save3ds_fuse_path)):
-            self.log("Couldn't find " + save3ds_fuse_path, 2)
+            where = f' at {save3ds_fuse_path}' if save3ds_fuse_path else ''
+            self.log(f"Couldn't find save3ds_fuse{where}. "
+                     f"Please put it in your PATH or set CUSTOM_INSTALL_SAVE3DS_PATH.", 2)
             return None, False, 0
 
         crypto = self.crypto
@@ -844,8 +846,9 @@ def main():
     installer.event.on_error += error
 
     if not installer.check_for_id0():
-        installer.event.on_error(f'Could not find id0 directory {installer.crypto.id0.hex()} '
-                                 f'inside Nintendo 3DS directory.')
+        installer.log(f'Could not find id0 directory {installer.crypto.id0.hex()} '
+                      f'inside Nintendo 3DS directory.', 2)
+        sys.exit(1)
 
     installer.prepare_titles(args.cia)
 
@@ -858,13 +861,12 @@ def main():
             sys.exit(1)
 
     result, copied_3dsx, application_count = installer.start()
-    if result is False:
-        # save3ds_fuse failed
-        installer.log('NOTE: Once save3ds_fuse is fixed, run the same command again with --skip-contents')
     if application_count >= 300:
         installer.log(f'\n\nWarning: {application_count} installed applications were detected.\n'
                       f'The HOME Menu will only show 300 icons.\n'
                       f'Some applications (not updates or DLC) will need to be deleted.')
+    if result is None or result['failed']:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
