@@ -1,6 +1,25 @@
 # custom-install
 Installs a title directly to an SD card for the Nintendo 3DS. Originally created late June 2019.
 
+> [!IMPORTANT]
+> **This is an unofficial fork** of [ihaveamac/custom-install](https://github.com/ihaveamac/custom-install). It fixes bugs that could delete or lose installed titles, plus a few smaller ones. These changes aren't part of the original project and its author doesn't support them, so please report problems with this fork here, not upstream.
+
+What's different in this fork:
+
+- **"Skip contents" no longer wipes the game.** Ticking it (or `--skip-contents`) used to delete an installed title's files and save and put an empty folder in their place.
+- **A missing seed no longer crashes the command line version.** A newer game whose seed isn't in your seeddb.bin is skipped with a message to update it, and the rest carry on.
+- **Reinstalling is safer.** The old copy is moved aside and only deleted once the new one is in place, so a crash or a pulled SD card midway doesn't leave you with nothing.
+- **One bad title doesn't stop the batch.** The rest still install and finalize still gets copied to the SD card. A title whose database entry couldn't be added is no longer slipped in by the next title while being reported as failed.
+- **The GUI doesn't get stuck with every button greyed out** after a wrong movable.sed or SD card. The command line gives a proper error and exit code instead of a Python crash.
+- **custom-install-finalize keeps going** when one title fails, and keeps the unfinished ones in cifinish.bin so you can run it again. These finalize changes are in the source only; the bundled `custom-install-finalize.3dsx` is still the original until I've tested the new one on a 3DS.
+
+None of this has been run on a real 3DS yet. It passes an automated test suite and the finalize program builds cleanly, but that's all. If you try it, I'd like to hear how it went in this fork's issues.
+
+To install this fork instead of the original, use this link in the pip commands below: `https://github.com/Akoi89/custom-install/archive/refs/heads/fix/install-safety.zip`
+
+The fixes were made with Claude (Anthropic) doing the code reading and the changes, and every change was checked by tests and a separate review.
+
+
 ## Summary
 
 ### Windows standalone
