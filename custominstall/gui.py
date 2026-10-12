@@ -28,7 +28,7 @@ from pyctr.type.tmd import TitleMetadataError
 
 from . import __version__
 from .__main__ import CustomInstall, load_cifinish, InvalidCIFinishError, InstallStatus, save3ds_fuse_path, \
-    SDPathError
+    SDPathError, KeyFileError
 
 if TYPE_CHECKING:
     from os import PathLike
@@ -744,7 +744,7 @@ class CustomInstallGUI(ttk.Frame):
             for line in format_exception(*exc):
                 for line2 in line.split('\n')[:-1]:
                     installer.log(line2)
-            if isinstance(exc[1], SDPathError):
+            if isinstance(exc[1], (SDPathError, KeyFileError)):
                 self.show_error(str(exc[1]))
             else:
                 self.show_error('An error occurred during installation.')
@@ -791,8 +791,8 @@ class CustomInstallGUI(ttk.Frame):
                 if result:
                     self.call_on_main(show_results)(result, copied_3dsx, application_count)
                 elif result is None:
-                    self.call_on_main(self.show_error)("An error occurred when trying to run save3ds_fuse.\n"
-                                                       "Either title.db doesn't exist, or save3ds_fuse couldn't be run.")
+                    self.call_on_main(self.show_error)("save3ds_fuse couldn't read the title database on the SD card.\n"
+                                                       "Its error message is in the console window.")
                     self.call_on_main(self.open_console)()
             except:
                 installer.event.on_error(sys.exc_info())

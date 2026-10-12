@@ -11,7 +11,7 @@ from enum import Enum
 from glob import glob
 import gzip
 from os import makedirs, remove, rename, scandir, environ
-from os.path import dirname, join, isdir, isfile
+from os.path import basename, dirname, join, isdir, isfile
 from random import randint
 from hashlib import sha256
 from pprint import pformat
@@ -80,6 +80,11 @@ CIFINISH_VERSION = 3
 
 # Placeholder for SDPathErrors
 class SDPathError(Exception):
+    pass
+
+
+# boot9 or movable.sed can't be read when the install starts
+class KeyFileError(Exception):
     pass
 
 
@@ -339,6 +344,13 @@ class CustomInstall:
                      f"Please put it in your PATH or set CUSTOM_INSTALL_SAVE3DS_PATH.", 2)
             return None, False, 0
 
+        # custom-install read boot9 and movable.sed when it started, but save3ds_fuse reads them again, and the
+        # card or drive they were on may be gone by now
+        for name, key_path in (('boot9', self.crypto.b9_path), ('movable.sed', self.movable)):
+            if not (key_path and isfile(key_path)):
+                raise KeyFileError(f'{name} is no longer at {key_path}. If it was on a card or drive that was '
+                                   f'removed or got a different drive letter, choose it again.')
+
         crypto = self.crypto
         # TODO: Move a lot of these into their own methods
         self.log("Finding path to install to...")
@@ -409,12 +421,28 @@ class CustomInstall:
 
             del tdb
 
-        with TemporaryDirectory(suffix='-custom-install') as tempdir:
+        with TemporaryDirectory(suffix='-custom-install') as workdir:
+            # the title database is extracted here
+            tempdir = join(workdir, 'db')
+            makedirs(tempdir)
+
+            # save3ds_fuse gets private copies of boot9 and movable.sed, so a card or reader that is removed
+            # during the batch (or a drive letter that changes) can't make every later title fail
+            keys_dir = join(workdir, 'keys')
+            makedirs(keys_dir)
+            boot9_copy = join(keys_dir, basename(crypto.b9_path))
+            movable_copy = join(keys_dir, 'movable.sed')
+            try:
+                copyfile(crypto.b9_path, boot9_copy)
+                copyfile(self.movable, movable_copy)
+            except OSError as e:
+                raise KeyFileError(f"Couldn't read boot9 or movable.sed: {e}") from e
+
             # set up the common arguments for the two times we call save3ds_fuse
             save3ds_fuse_common_args = [
                 save3ds_fuse_path,
-                '-b', crypto.b9_path,
-                '-m', self.movable,
+                '-b', boot9_copy,
+                '-m', movable_copy,
                 '--sd', self.sd,
                 '--db', 'sdtitle',
                 tempdir
@@ -881,7 +909,7 @@ def main():
 
     try:
         result, copied_3dsx, application_count = installer.start()
-    except SDPathError as e:
+    except (SDPathError, KeyFileError) as e:
         installer.log(str(e), 2)
         sys.exit(1)
     if application_count >= 300:

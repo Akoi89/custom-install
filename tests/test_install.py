@@ -281,7 +281,13 @@ def make_installer(sd, readers, skip_contents, crypto=None):
     installer.skip_contents = skip_contents
     installer.overwrite_saves = False
     installer.cifinish_out = None
-    installer.movable = 'movable.sed'
+    # start() checks that these exist and gives save3ds_fuse copies of them
+    keys = sd.parent / 'keys'
+    keys.mkdir(exist_ok=True)
+    (keys / 'boot9.bin').write_bytes(b'boot9')
+    (keys / 'movable.sed').write_bytes(b'movable')
+    installer.crypto.b9_path = str(keys / 'boot9.bin')
+    installer.movable = str(keys / 'movable.sed')
     return installer
 
 
@@ -791,3 +797,53 @@ def test_gui_search_dirs_put_the_executable_folder_first_when_frozen(monkeypatch
     monkeypatch.setattr(gui.sys, 'executable', os.path.join('app', 'ci-gui.exe'))
     monkeypatch.setattr(gui, 'getcwd', lambda: 'current')
     assert gui.search_dirs() == ['app', 'current', gui.file_parent]
+
+
+# ---------------------------------------------------------------------------
+# boot9 and movable.sed for save3ds_fuse
+
+def test_missing_boot9_stops_before_touching_the_sd(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
+    # the drive boot9 was chosen from is gone by the time the install starts
+    os.remove(installer.crypto.b9_path)
+
+    with pytest.raises(ci.KeyFileError, match='boot9 is no longer at'):
+        installer.start()
+
+    assert (id1_root / 'dbs' / 'title.db').read_bytes() == b'not a real database'
+    assert not (id1_root / 'title').exists()
+
+
+def test_save3ds_fuse_keeps_working_when_the_boot9_drive_goes_away(tmp_path, monkeypatch):
+    sd, _ = make_sd(tmp_path)
+    fuse = tmp_path / 'save3ds_fuse'
+    fuse.write_bytes(b'')
+    monkeypatch.setattr(ci, 'save3ds_fuse_path', str(fuse))
+
+    installer = make_installer(sd, [FakeReader(TID_A), FakeReader(TID_B)], skip_contents=True)
+    original_boot9 = installer.crypto.b9_path
+    original_movable = installer.movable
+    runs = []
+
+    def fake_run(args, **kwargs):
+        boot9 = args[args.index('-b') + 1]
+        movable = args[args.index('-m') + 1]
+        with open(boot9, 'rb') as b, open(movable, 'rb') as m:
+            runs.append((boot9, movable, b.read(), m.read()))
+        if os.path.exists(original_boot9):
+            # the card or reader holding boot9 and movable.sed is removed after the first run
+            os.remove(original_boot9)
+            os.remove(original_movable)
+        run = FakeRun()
+        run.args = args
+        return run
+
+    monkeypatch.setattr(ci.subprocess, 'run', fake_run)
+    result, _, _ = installer.start()
+
+    assert len(result['installed']) == 2 and not result['failed']
+    # one extract and one import per title, all with readable copies, never the original paths
+    assert len(runs) == 3
+    assert all(b == b'boot9' and m == b'movable' for _, _, b, m in runs)
+    assert all(bp != original_boot9 and mp != original_movable for bp, mp, _, _ in runs)
