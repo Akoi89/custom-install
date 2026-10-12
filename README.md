@@ -100,13 +100,13 @@ Linux users may need to install a Tk package:
 
 ### Building Windows standalone
 
-This needs 64-bit Windows Python 3 (the python.org installer, with its default tcl/tk) and PowerShell. From the repo folder:
+This needs 64-bit Windows Python 3 (the python.org installer, with its default tcl/tk), the x86 Visual C++ redistributable (its `vcruntime140.dll` goes next to the 32-bit save3ds_fuse) and PowerShell. From the repo folder:
 
 ```
 powershell -ExecutionPolicy Bypass -File standalone\make-standalone.ps1
 ```
 
-It makes a virtual environment in `build\standalone-venv`, installs cx_Freeze and this package into it, freezes the three exes into `build\custom-install-standalone`, and zips that folder to `dist\custom-install-standalone.zip`. Pass `-Venv <folder>` to use another environment. `standalone\setup-cxfreeze.py` is the cx_Freeze script it runs.
+It makes a virtual environment in `build\standalone-venv`, installs cx_Freeze and this package's dependencies into it, freezes the three exes from this folder into `build\custom-install-standalone`, and zips that folder to `dist\custom-install-standalone.zip`. Pass `-Venv <folder>` to use another environment. `standalone\setup-cxfreeze.py` is the cx_Freeze script it runs.
 
 ## Troubleshooting
 
