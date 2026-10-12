@@ -752,14 +752,20 @@ def test_import_cannot_start_save3ds_fuse_fails_only_that_title(tmp_path, monkey
         raise PermissionError(5, 'Access is denied')
 
     installers = []
-    result, application_count, imports = run_with_existing_database(
-        tmp_path, monkeypatch, blocked, lambda installer, imports: installers.append(installer))
+
+    def prepare(installer, imports):
+        # write contents, so the hint about running again with --skip-contents applies
+        installer.skip_contents = False
+        installers.append(installer)
+
+    result, application_count, imports = run_with_existing_database(tmp_path, monkeypatch, blocked, prepare)
 
     assert len(result['failed']) == 1 and TID_A in result['failed'][0]
     assert len(result['installed']) == 1 and TID_B in result['installed'][0]
     assert any(l.startswith("Error: Couldn't run save3ds_fuse at") and 'Access is denied' in l
                for l in installers[0].log_lines)
     assert any('antivirus or security software' in l for l in installers[0].log_lines)
+    assert any('--skip-contents' in l for l in installers[0].log_lines)
     # the entry of the failed title is back as it was for the next import
     assert imports[1][TID_A] == b'OLD-A'
     assert application_count == 3

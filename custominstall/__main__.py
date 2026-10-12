@@ -702,6 +702,10 @@ class CustomInstall:
                                              **extra_kwargs)
                     except OSError as e:
                         self.log_save3ds_fuse_error(e)
+                        if not self.skip_contents:
+                            self.log('The title contents were written, but adding the title to the database failed.')
+                            self.log('Once save3ds_fuse works, run the same command again with --skip-contents '
+                                     'to add the entry.')
                         # the handler below marks this title failed and restores the info entry
                         raise
                     if out.returncode:

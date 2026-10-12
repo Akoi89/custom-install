@@ -27,7 +27,8 @@ from pyctr.type.cia import CIAError
 from pyctr.type.tmd import TitleMetadataError
 
 from . import __version__
-from .__main__ import CustomInstall, load_cifinish, InvalidCIFinishError, InstallStatus, save3ds_fuse_path
+from .__main__ import CustomInstall, load_cifinish, InvalidCIFinishError, InstallStatus, save3ds_fuse_path, \
+    SDPathError
 
 if TYPE_CHECKING:
     from os import PathLike
@@ -742,7 +743,10 @@ class CustomInstallGUI(ttk.Frame):
             for line in format_exception(*exc):
                 for line2 in line.split('\n')[:-1]:
                     installer.log(line2)
-            self.show_error('An error occurred during installation.')
+            if isinstance(exc[1], SDPathError):
+                self.show_error(str(exc[1]))
+            else:
+                self.show_error('An error occurred during installation.')
             self.open_console()
 
         def ci_on_cia_start(idx):
