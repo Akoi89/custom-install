@@ -102,7 +102,8 @@ Linux users may need to install a Tk package:
 
 ## Troubleshooting
 
-- **"Could not find a suitable id1 directory"**: This usually means MSET9 is still set up on the SD card, and this fork now says so in the message. Run the MSET9 script again and choose "5. Remove MSET9".
+- **"MSET9 is still set up on this SD card"**: Run the MSET9 script again and choose "5. Remove MSET9", then try again. The original custom-install reports this as "Could not find a suitable id1 directory".
+- **"Could not find a suitable id1 directory"**: The folder that holds this console's data on the SD card is missing or was renamed. Put the card back in the 3DS, turn it on once so it sets the folder up again, then retry.
 - **"There are multiple id1 directories"**: This fork uses the folder that has a title database when only one of them does. If it still stops, back up the folders that aren't in use and remove them.
 - **"Access is denied" or "Couldn't run save3ds_fuse"**: Antivirus or security software is probably blocking save3ds_fuse. On macOS and Linux, make sure the file is executable (`chmod +x`).
 - **WinError 1117 or other I/O errors while writing**: This points to a fault with the SD card or the card reader. Test the card (H2testw on Windows, F3 on macOS and Linux) and try another reader.
