@@ -359,10 +359,7 @@ class CustomInstall:
             # a leftover id1 from another console or an old setup usually has no title database
             with_db = [name for name in id1s if isfile(join(sd_path, name, 'dbs', 'title.db'))]
             if len(with_db) == 1:
-                others = [name for name in id1s if name != with_db[0]]
-                self.log(f'There are multiple id1 directories for id0 {crypto.id0.hex()}. '
-                         f'Using {with_db[0]} because it is the only one with a title database. '
-                         f'The others are not used: {", ".join(others)}', 1)
+                # the check below stops the install and says which folder to keep
                 id1s = with_db
             else:
                 raise SDPathError(f'There are multiple id1 directories for id0 {crypto.id0.hex()}, '
@@ -370,6 +367,15 @@ class CustomInstall:
         elif len(id1s) == 0:
             raise SDPathError(f'Could not find a suitable id1 directory for id0 {crypto.id0.hex()}')
         id1 = id1s[0]
+
+        # save3ds_fuse, which updates the title database, uses the first folder it finds next to the id1,
+        # whatever its name, so with any other folder there it could write to a different one than this
+        other_dirs = sorted(d.name for d in scandir(sd_path) if d.is_dir() and d.name != id1)
+        if other_dirs:
+            raise SDPathError(f'{id1} is the folder this console uses, but {sd_path} also holds: '
+                              f'{", ".join(other_dirs)}. save3ds_fuse, which updates the title database, '
+                              f'could use one of those instead. Move them out of that folder (to your PC, '
+                              f'for example), then try again.')
         sd_path = join(sd_path, id1)
 
         if self.cifinish_out:

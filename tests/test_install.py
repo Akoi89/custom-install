@@ -663,25 +663,41 @@ def test_normal_id1_is_not_taken_for_mset9(tmp_path, fake_tools):
     add_id1(sd, 'backup-of-something', with_db=False)
 
     installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=True)
-    result, _, _ = installer.start()
+    with pytest.raises(ci.SDPathError) as excinfo:
+        installer.start()
 
-    assert result['installed'] and not result['failed']
+    # they still stop the install, since save3ds_fuse could use one of them instead of the id1
+    message = str(excinfo.value)
+    assert 'MSET9' not in message
+    assert message.startswith(ID1) and 'z' * 32 in message and 'backup-of-something' in message
 
 
-def test_multiple_id1_uses_the_one_with_a_title_database(tmp_path, fake_tools):
+def test_multiple_id1_names_the_one_with_a_title_database_to_keep(tmp_path, fake_tools):
     sd, id1_root = make_sd(tmp_path)
     # the first id1 has no database, the second one does
     (id1_root / 'dbs' / 'title.db').unlink()
     other = add_id1(sd, ID2, with_db=True)
 
     installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
-    result, _, _ = installer.start()
+    with pytest.raises(ci.SDPathError) as excinfo:
+        installer.start()
 
-    assert result['installed'] and not result['failed']
-    assert (other / 'title' / '00040000' / '00012345' / 'content' / '00000000.app').is_file()
+    # save3ds_fuse can't be told which folder to use, so nothing is installed until the other one is moved
+    message = str(excinfo.value)
+    assert message.startswith(ID2) and ID1 in message
+    assert not (other / 'title').exists() and not (id1_root / 'title').exists()
+
+
+def test_any_other_folder_next_to_the_id1_stops_the_install(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    (id1_root.parent / '.hidden').mkdir()
+
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
+    with pytest.raises(ci.SDPathError, match=r'\.hidden'):
+        installer.start()
+
     assert not (id1_root / 'title').exists()
-    warnings = [l for l in installer.log_lines if l.startswith('Warning: ')]
-    assert len(warnings) == 1 and ID2 in warnings[0] and ID1 in warnings[0]
+    assert (id1_root / 'dbs' / 'title.db').read_bytes() == b'not a real database'
 
 
 def test_multiple_id1_with_two_databases_is_an_error_listing_both(tmp_path, fake_tools):
