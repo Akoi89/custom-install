@@ -15,7 +15,7 @@ What's different in this fork:
 
 None of this has been run on a real 3DS yet. It passes an automated test suite and the finalize program builds cleanly, but that's all. If you try it, I'd like to hear how it went in this fork's issues.
 
-To install this fork instead of the original, use this link in the pip commands below: `https://github.com/Akoi89/custom-install/archive/refs/heads/fix/install-safety.zip`
+The pip commands below install this fork, not the original.
 
 The fixes were made with Claude (Anthropic) doing the code reading and the changes, and every change was checked by tests and a separate review.
 
@@ -24,9 +24,7 @@ The fixes were made with Claude (Anthropic) doing the code reading and the chang
 
 ### Windows standalone
 
-1. [Dump boot9.bin and movable.sed](https://wiki.hacks.guide/wiki/3DS:Dump_system_files) from a 3DS system.
-2. Download the [latest releases](https://github.com/ihaveamac/custom-install/releases).
-3. Extract and run ci-gui. Read `windows-quickstart.txt`.
+This fork has no standalone build. The releases page of the original project only has the old 2.1 build, and it doesn't have these fixes. Use the Python install below, it works on Windows too.
 
 ### With installed Python
 
@@ -35,8 +33,8 @@ The fixes were made with Claude (Anthropic) doing the code reading and the chang
 
 1. [Dump boot9.bin and movable.sed](https://ihaveamac.github.io/dump.html) from a 3DS system.
 2. Install the packages:
-  * Windows: `py -3 -m pip install --user --upgrade https://github.com/ihaveamac/custom-install/archive/refs/heads/python-package.zip`
-  * macOS/Linux: `python3 -m pip install --user --upgrade https://github.com/ihaveamac/custom-install/archive/refs/heads/python-package.zip`
+  * Windows: `py -3 -m pip install --user --upgrade https://github.com/Akoi89/custom-install/archive/refs/heads/fix/install-safety.zip`
+  * macOS/Linux: `python3 -m pip install --user --upgrade https://github.com/Akoi89/custom-install/archive/refs/heads/fix/install-safety.zip`
 
 To run the GUI:
 * Windows: `py -3 -m custominstall.gui`
@@ -101,6 +99,16 @@ Linux users may need to install a Tk package:
 
 > [!WARNING]
 > This section is OUTDATED and currently does not work with the Python package setup.
+
+## Troubleshooting
+
+- **"Could not find a suitable id1 directory"**: This usually means MSET9 is still set up on the SD card, and this fork now says so in the message. Run the MSET9 script again and choose "5. Remove MSET9".
+- **"There are multiple id1 directories"**: This fork uses the folder that has a title database when only one of them does. If it still stops, back up the folders that aren't in use and remove them.
+- **"Access is denied" or "Couldn't run save3ds_fuse"**: Antivirus or security software is probably blocking save3ds_fuse. On macOS and Linux, make sure the file is executable (`chmod +x`).
+- **WinError 1117 or other I/O errors while writing**: This points to a fault with the SD card or the card reader. Test the card (H2testw on Windows, F3 on macOS and Linux) and try another reader.
+- **"CIFINISH magic not found", or custom-install-finalize showing up as unknown homebrew**: The file system on the SD card is probably damaged, often from removing the card without ejecting it. Check the card, delete `cifinish.bin` from it, and run custom-install again.
+- **"0xc000007b" when starting ci-gui**: That's the old standalone build. Use the Python install instead.
+- **"Failed to finish ticket install: d8e08019" in custom-install-finalize**: I haven't confirmed the cause. One report links it to a game made only for the New 3DS being installed on an older model.
 
 ## License/Credits
 [save3ds by wwylele](https://github.com/wwylele/save3ds) is used to interact with the Title Database (details in `bin/README`).
