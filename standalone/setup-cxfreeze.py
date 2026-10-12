@@ -3,7 +3,6 @@ zips the result. By hand, from the repo folder:
 python standalone\setup-cxfreeze.py build_exe --build-exe=build\custom-install-standalone
 """
 import sys
-from os import environ
 from os.path import abspath, dirname, isfile, join
 
 from cx_Freeze import setup, Executable
@@ -27,13 +26,6 @@ include_files = [
     (join(ROOT, 'extras', 'windows-quickstart.txt'), 'windows-quickstart.txt'),
     (join(ROOT, 'LICENSE.md'), 'LICENSE.md'),
 ]
-
-# save3ds_fuse.exe is a 32-bit program, so it needs the 32-bit C runtime next to it (the one cx_Freeze bundles
-# for the exes is 64-bit). It is taken from this PC's Visual C++ redistributable.
-vcruntime_x86 = join(environ.get('SystemRoot', r'C:\Windows'), 'SysWOW64', 'vcruntime140.dll')
-if not isfile(vcruntime_x86):
-    sys.exit(f'{vcruntime_x86} is missing, install the x86 Visual C++ redistributable to build')
-include_files.append((vcruntime_x86, join('bin', 'vcruntime140.dll')))
 
 # licences: the bundled Python (from the Python install that runs the build), save3ds and comtypes
 # (cx_Freeze adds the Visual C++ one to share\licenses\vc_redist and the Tcl/Tk one to share\tk8.6)

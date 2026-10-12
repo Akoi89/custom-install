@@ -17,6 +17,11 @@ function Run($exe, $argList) {
     if ($LASTEXITCODE -ne 0) { throw "failed ($LASTEXITCODE): $exe $argList" }
 }
 
+# save3ds_fuse.exe is a 32-bit program, so it needs the 32-bit C runtime next to it (the one cx_Freeze bundles
+# for the exes is 64-bit). It comes from this PC's x86 Visual C++ redistributable.
+$vcruntimeX86 = Join-Path $env:SystemRoot 'SysWOW64\vcruntime140.dll'
+if (-not (Test-Path $vcruntimeX86)) { throw "$vcruntimeX86 is missing, install the x86 Visual C++ redistributable" }
+
 if (-not (Test-Path $py)) {
     Run 'py' @('-3', '-m', 'venv', $Venv)
 }
@@ -48,6 +53,8 @@ $pkgDir = Join-Path $outDir 'lib\custominstall'
 foreach ($name in 'TaskbarLib.tlb', 'title.db.gz', 'custom-install-finalize.3dsx', 'bin') {
     Remove-Item -Recurse -Force (Join-Path $pkgDir $name)
 }
+# copied here because cx_Freeze leaves out files from Windows system folders
+Copy-Item $vcruntimeX86 (Join-Path $outDir 'bin\vcruntime140.dll')
 
 # the zip holds one top-level folder, custom-install-standalone
 Push-Location (Join-Path $root 'build')
