@@ -763,3 +763,25 @@ def test_import_cannot_start_save3ds_fuse_fails_only_that_title(tmp_path, monkey
     # the entry of the failed title is back as it was for the next import
     assert imports[1][TID_A] == b'OLD-A'
     assert application_count == 3
+
+
+# ---------------------------------------------------------------------------
+# GUI search folders
+
+def test_gui_search_dirs_start_with_the_current_folder(monkeypatch):
+    pytest.importorskip('tkinter')
+    from custominstall import gui
+
+    monkeypatch.setattr(gui, 'frozen', False)
+    monkeypatch.setattr(gui, 'getcwd', lambda: 'current')
+    assert gui.search_dirs() == ['current', gui.file_parent]
+
+
+def test_gui_search_dirs_put_the_executable_folder_first_when_frozen(monkeypatch):
+    pytest.importorskip('tkinter')
+    from custominstall import gui
+
+    monkeypatch.setattr(gui, 'frozen', True)
+    monkeypatch.setattr(gui.sys, 'executable', os.path.join('app', 'ci-gui.exe'))
+    monkeypatch.setattr(gui, 'getcwd', lambda: 'current')
+    assert gui.search_dirs() == ['app', 'current', gui.file_parent]

@@ -6,7 +6,7 @@
 # This file is licensed under The MIT License (MIT).
 # You can find the full license text in LICENSE.md in the root of this project.
 
-from os import environ, scandir
+from os import environ, getcwd, scandir
 from os.path import abspath, basename, dirname, join, isfile
 import queue
 import sys
@@ -52,17 +52,27 @@ if is_windows:
         # the taskbar is optional, a COM or OS error must not stop the GUI from starting
         taskbar = None
 
-# automatically load boot9 if it's in the current directory
-b9_paths.insert(0, join(file_parent, 'boot9.bin'))
-b9_paths.insert(0, join(file_parent, 'boot9_prot.bin'))
+def search_dirs():
+    """Folders checked for boot9, seeddb and movable.sed, in order. The package folder is last because
+    with pip it is inside site-packages, where nobody puts their files."""
+    dirs = []
+    if frozen:
+        dirs.append(dirname(sys.executable))
+    dirs.append(getcwd())
+    dirs.append(file_parent)
+    return dirs
+
+
+# automatically load boot9 if it's in one of the search folders
+b9_paths[:0] = [join(d, name) for d in search_dirs() for name in ('boot9_prot.bin', 'boot9.bin')]
 
 seeddb_paths = [join(x, 'seeddb.bin') for x in config_dirs]
 try:
     seeddb_paths.insert(0, environ['SEEDDB_PATH'])
 except KeyError:
     pass
-# automatically load seeddb if it's in the current directory
-seeddb_paths.insert(0, join(file_parent, 'seeddb.bin'))
+# automatically load seeddb if it's in one of the search folders
+seeddb_paths[:0] = [join(d, 'seeddb.bin') for d in search_dirs()]
 
 
 def clamp(n, smallest, largest):
@@ -78,7 +88,7 @@ def find_first_file(paths):
 # find boot9, seeddb, and movable.sed to auto-select in the gui
 default_b9_path = find_first_file(b9_paths)
 default_seeddb_path = find_first_file(seeddb_paths)
-default_movable_sed_path = find_first_file([join(file_parent, 'movable.sed')])
+default_movable_sed_path = find_first_file([join(d, 'movable.sed') for d in search_dirs()])
 
 if default_seeddb_path:
     load_seeddb(default_seeddb_path)
@@ -307,7 +317,7 @@ class CustomInstallGUI(ttk.Frame):
 
         def sd_callback():
             f = fd.askdirectory(parent=parent, title='Select SD root (the directory or drive that contains '
-                                                     '"Nintendo 3DS")', initialdir=file_parent, mustexist=True)
+                                                     '"Nintendo 3DS")', initialdir=getcwd(), mustexist=True)
             if f:
                 cifinish_path = join(f, 'cifinish.bin')
                 try:
@@ -358,7 +368,7 @@ class CustomInstallGUI(ttk.Frame):
         def create_required_file_picker(type_name, types, default, row, callback=lambda filename: None):
             def internal_callback():
                 f = fd.askopenfilename(parent=parent, title='Select ' + type_name, filetypes=types,
-                                       initialdir=file_parent)
+                                       initialdir=getcwd())
                 if f:
                     selected.delete('1.0', tk.END)
                     selected.insert(tk.END, f)
@@ -384,9 +394,13 @@ class CustomInstallGUI(ttk.Frame):
         def seeddb_callback(path: 'Union[PathLike, bytes, str]'):
             load_seeddb(path)
 
-        create_required_file_picker('boot9', [('boot9 file', '*.bin')], default_b9_path, 1, b9_callback)
-        create_required_file_picker('seeddb', [('seeddb file', '*.bin')], default_seeddb_path, 2, seeddb_callback)
-        create_required_file_picker('movable.sed', [('movable.sed file', '*.sed')], default_movable_sed_path, 3)
+        # Tk matches file types case-sensitively on Linux, so both cases are listed
+        create_required_file_picker('boot9', [('boot9 file', ('*.bin', '*.BIN')), ('All files', '*')],
+                                    default_b9_path, 1, b9_callback)
+        create_required_file_picker('seeddb', [('seeddb file', ('*.bin', '*.BIN')), ('All files', '*')],
+                                    default_seeddb_path, 2, seeddb_callback)
+        create_required_file_picker('movable.sed', [('movable.sed file', ('*.sed', '*.SED')), ('All files', '*')],
+                                    default_movable_sed_path, 3)
 
         # ---------------------------------------------------------------- #
         # create buttons to add cias
@@ -394,8 +408,8 @@ class CustomInstallGUI(ttk.Frame):
         titlelist_buttons.grid(row=1, column=0)
 
         def add_cias_callback():
-            files = fd.askopenfilenames(parent=parent, title='Select CIA files', filetypes=[('CIA files', '*.cia')],
-                                        initialdir=file_parent)
+            files = fd.askopenfilenames(parent=parent, title='Select CIA files', filetypes=[('CIA files', ('*.cia', '*.CIA')), ('All files', '*')],
+                                        initialdir=getcwd())
             results = {}
             for f in files:
                 success, reason = self.add_cia(f)
@@ -412,7 +426,7 @@ class CustomInstallGUI(ttk.Frame):
 
         def add_cdn_callback():
             d = fd.askdirectory(parent=parent, title='Select folder containing title contents in CDN format',
-                                initialdir=file_parent)
+                                initialdir=getcwd())
             if d:
                 if isfile(join(d, 'tmd')):
                     success, reason = self.add_cia(d)
@@ -427,7 +441,7 @@ class CustomInstallGUI(ttk.Frame):
         add_cdn.grid(row=0, column=1)
 
         def add_dirs_callback():
-            d = fd.askdirectory(parent=parent, title='Select folder containing CIA files', initialdir=file_parent)
+            d = fd.askdirectory(parent=parent, title='Select folder containing CIA files', initialdir=getcwd())
             if d:
                 results = {}
                 for f in scandir(d):
