@@ -3,6 +3,7 @@ zips the result. By hand, from the repo folder:
 python standalone\setup-cxfreeze.py build_exe --build-exe=build\custom-install-standalone
 """
 import sys
+from importlib import metadata
 from os.path import abspath, dirname, isfile, join
 
 from cx_Freeze import setup, Executable
@@ -27,16 +28,22 @@ include_files = [
     (join(ROOT, 'LICENSE.md'), 'LICENSE.md'),
 ]
 
-# licences: the bundled Python (from the Python install that runs the build), save3ds and comtypes
+# licences: the bundled Python (from the Python install that runs the build), save3ds and the Python packages
 # (cx_Freeze adds the Visual C++ one to share\licenses\vc_redist and the Tcl/Tk one to share\tk8.6)
 share_dir = join('share', 'licenses')
 python_license = join(sys.base_prefix, 'LICENSE.txt')
 if isfile(python_license):
     include_files.append((python_license, join(share_dir, 'python', 'LICENSE.txt')))
-include_files += [
-    (join(HERE, 'licenses', 'save3ds-LICENSE-MIT.txt'), join(share_dir, 'save3ds', 'LICENSE-MIT.txt')),
-    (join(HERE, 'licenses', 'comtypes-LICENSE.txt'), join(share_dir, 'comtypes', 'LICENSE.txt')),
-]
+include_files.append(
+    (join(HERE, 'licenses', 'save3ds-LICENSE-MIT.txt'), join(share_dir, 'save3ds', 'LICENSE-MIT.txt')))
+# the bundled Python packages, from their installed metadata
+for dist_name in ('pyctr', 'events', 'pycryptodomex', 'comtypes'):
+    license_files = [f for f in metadata.distribution(dist_name).files or []
+                     if f.name.lower().startswith(('license', 'copying'))]
+    if not license_files:
+        sys.exit(f'no licence file found for {dist_name}')
+    for f in license_files:
+        include_files.append((str(f.locate()), join(share_dir, dist_name, f.name)))
 
 gui_script = join(HERE, 'ci-gui.py')
 cli_script = join(HERE, 'custominstall-cli.py')
