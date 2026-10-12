@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from events import Events
 
 from pyctr.crypto import CryptoEngine, Keyslot, MissingSeedError, load_seeddb, get_seed
+from pyctr.crypto.engine import BootromNotFoundError, CorruptBootromError
 from pyctr.type.cdn import CDNReader, CDNError
 from pyctr.type.cia import CIAReader, CIAError
 from pyctr.type.ncch import NCCHSection
@@ -242,8 +243,8 @@ class CustomInstall:
 
         if not (movable and isfile(movable)):
             raise KeyFileError(f"movable.sed can't be found at {movable}. If it was on a card or drive that was "
-                               f'removed or got a different drive letter, choose it again, or pass the right '
-                               f'path with -m.')
+                               f'removed or got a different drive letter, choose it again (on the command '
+                               f'line, pass the right path with -m).')
 
         self.crypto = CryptoEngine(boot9=boot9)
         self.crypto.setup_sd_key_from_file(movable)
@@ -357,11 +358,12 @@ class CustomInstall:
         for name, flag, key_path in (('boot9', '-b', self.boot9), ('movable.sed', '-m', self.movable)):
             if not (key_path and isfile(key_path)):
                 raise KeyFileError(f'{name} is no longer at {key_path}. If it was on a card or drive that was '
-                                   f'removed or got a different drive letter, choose it again, or pass the right '
-                                   f'path with {flag}.')
-        # the sizes pyctr accepts for a boot9 dump (setup_keys_from_boot9_file)
-        if getsize(self.boot9) not in (0x8000, 0x10000):
-            raise KeyFileError(f"{self.boot9} doesn't look like a boot9 dump (wrong size).")
+                                   f'removed or got a different drive letter, choose it again (on the command '
+                                   f'line, pass the right path with {flag}).')
+        # pyctr also takes the 32 KiB boot9_prot.bin, but save3ds_fuse only works with the full 64 KiB dump
+        if getsize(self.boot9) != 0x10000:
+            raise KeyFileError(f"{self.boot9} isn't a full boot9 dump. custom-install needs the 64 KiB boot9.bin "
+                               f"(boot9_prot.bin isn't enough).")
 
         crypto = self.crypto
         # TODO: Move a lot of these into their own methods
@@ -897,6 +899,16 @@ def main():
                                   skip_contents=(args.skip_contents or False))
     except KeyFileError as e:
         print(f'Error: {e}')
+        sys.exit(1)
+    except BootromNotFoundError as e:
+        # its argument is the tuple of paths pyctr checked
+        checked = ', '.join(str(p) for p in e.args[0]) if e.args and isinstance(e.args[0], (tuple, list)) else ''
+        print(f"Error: boot9 wasn't found{f' (checked: {checked})' if checked else ''}.")
+        print('Check the path given with -b, or put boot9.bin in one of the places listed in the README.')
+        sys.exit(1)
+    except CorruptBootromError as e:
+        print(f"Error: the boot9 file isn't a valid boot9 dump ({e}).")
+        print('Check the path given with -b, or put boot9.bin in one of the places listed in the README.')
         sys.exit(1)
 
     def log_handle(msg, end='\n'):

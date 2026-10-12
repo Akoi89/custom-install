@@ -66,7 +66,8 @@ def search_dirs():
 
 
 # automatically load boot9 if it's in one of the search folders
-b9_paths[:0] = [join(d, name) for d in search_dirs() for name in ('boot9_prot.bin', 'boot9.bin')]
+# (boot9.bin first: the install needs the full dump, boot9_prot.bin is only a fallback)
+b9_paths[:0] = [join(d, name) for name in ('boot9.bin', 'boot9_prot.bin') for d in search_dirs()]
 
 seeddb_paths = [join(x, 'seeddb.bin') for x in config_dirs]
 try:

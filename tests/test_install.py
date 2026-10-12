@@ -262,8 +262,8 @@ class FakeRun:
     args = []
 
 
-# start() accepts a boot9 of the size pyctr accepts, so the fake one has it
-BOOT9_DATA = b'boot9'.ljust(0x8000, b'\0')
+# start() needs the full 64 KiB boot9.bin that save3ds_fuse reads, so the fake one has that size
+BOOT9_DATA = b'boot9'.ljust(0x10000, b'\0')
 
 
 def make_sd(tmp_path):
@@ -550,7 +550,7 @@ def test_chosen_boot9_is_used_when_the_first_loaded_one_is_gone(tmp_path, monkey
     installer.crypto.b9_path = str(tmp_path / 'removed-card' / 'boot9.bin')
     chosen = tmp_path / 'chosen' / 'boot9.bin'
     chosen.parent.mkdir()
-    chosen_data = b'chosen boot9'.ljust(0x8000, b'\0')
+    chosen_data = b'chosen boot9'.ljust(0x10000, b'\0')
     chosen.write_bytes(chosen_data)
     installer.boot9 = str(chosen)
     runs = []
@@ -903,31 +903,30 @@ def test_missing_movable_stops_before_touching_the_sd(tmp_path, fake_tools):
 def test_wrong_size_boot9_stops_before_touching_the_sd(tmp_path, fake_tools):
     sd, id1_root = make_sd(tmp_path)
     installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
-    # a file that is there but is not a boot9 dump, such as the wrong file picked in the GUI
+    # boot9_prot.bin (0x8000 bytes) loads in pyctr but save3ds_fuse cannot use it
     with open(installer.boot9, 'wb') as f:
-        f.write(b'boot9'.ljust(0x4000, b'\0'))
+        f.write(b'boot9'.ljust(0x8000, b'\0'))
 
-    with pytest.raises(ci.KeyFileError, match="doesn't look like a boot9 dump"):
+    with pytest.raises(ci.KeyFileError, match="isn't a full boot9 dump") as excinfo:
         installer.start()
+    assert 'boot9_prot.bin' in str(excinfo.value)
 
     assert (id1_root / 'dbs' / 'title.db').read_bytes() == b'not a real database'
     assert not (id1_root / 'title').exists()
 
 
-def test_boot9_of_either_dump_size_is_accepted(tmp_path, fake_tools):
-    for size in (0x8000, 0x10000):
-        sd, _ = make_sd(tmp_path / str(size))
-        installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=True)
-        with open(installer.boot9, 'wb') as f:
-            f.write(b'boot9'.ljust(size, b'\0'))
-        result, _, _ = installer.start()
-        assert len(result['installed']) == 1
+def test_full_size_boot9_is_accepted(tmp_path, fake_tools):
+    sd, _ = make_sd(tmp_path)
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=True)
+    assert os.path.getsize(installer.boot9) == 0x10000
+    result, _, _ = installer.start()
+    assert len(result['installed']) == 1
 
 
 def test_missing_movable_at_start_up_is_a_key_file_error(tmp_path):
     with pytest.raises(ci.KeyFileError, match="movable.sed can't be found at") as excinfo:
         ci.CustomInstall(movable=str(tmp_path / 'gone' / 'movable.sed'), sd=str(tmp_path / 'sd'))
-    assert 'with -m' in str(excinfo.value)
+    assert 'on the command line, pass the right path with -m' in str(excinfo.value)
 
 
 def test_main_reports_missing_movable_and_exits_1(tmp_path, monkeypatch, capsys):
@@ -941,6 +940,37 @@ def test_main_reports_missing_movable_and_exits_1(tmp_path, monkeypatch, capsys)
     assert 'Traceback' not in captured.out + captured.err
 
 
+def run_main_with_boot9(tmp_path, monkeypatch, capsys, boot9):
+    movable = tmp_path / 'movable.sed'
+    movable.write_bytes(b'\0' * 0x140)
+    monkeypatch.setattr(sys, 'argv', ['custominstall', '-m', str(movable), '-b', str(boot9),
+                                      '--sd', str(tmp_path), 'a.cia'])
+    with pytest.raises(SystemExit) as excinfo:
+        ci.main()
+    captured = capsys.readouterr()
+    return excinfo.value.code, captured.out, captured.err
+
+
+def test_main_reports_missing_boot9_and_exits_1(tmp_path, monkeypatch, capsys):
+    code, out, err = run_main_with_boot9(tmp_path, monkeypatch, capsys, tmp_path / 'gone' / 'boot9.bin')
+
+    assert code == 1
+    assert 'Error: ' in out
+    assert 'Check the path given with -b' in out
+    assert 'Traceback' not in out + err
+
+
+def test_main_reports_a_boot9_that_is_not_a_boot9_and_exits_1(tmp_path, monkeypatch, capsys):
+    bad = tmp_path / 'boot9.bin'
+    bad.write_bytes(b'\0' * 0x10000)
+    code, out, err = run_main_with_boot9(tmp_path, monkeypatch, capsys, bad)
+
+    assert code == 1
+    assert 'Error: ' in out
+    assert 'Check the path given with -b' in out
+    assert 'Traceback' not in out + err
+
+
 class StubTextbox:
     def __init__(self, value):
         self.value = value
@@ -951,6 +981,9 @@ class StubTextbox:
 
 def run_gui_start_install(monkeypatch, boot9, error):
     # start_install only needs these parts of the window, so it runs without a display
+    # (importing custominstall.gui runs its start-up code once per test session: it adds the cwd and package
+    # folder to pyctr's boot9 search list, may load a seeddb from the config folders, and tries to create the
+    # Windows taskbar object. That is why 'taskbar' is patched below, and why no test here relies on b9_paths.)
     pytest.importorskip('tkinter')
     from custominstall import gui
 
@@ -985,8 +1018,10 @@ def test_gui_passes_no_boot9_when_the_box_is_empty(monkeypatch):
 
 
 def test_gui_shows_a_key_file_error_as_it_is_worded(monkeypatch):
-    _, shown = run_gui_start_install(monkeypatch, '', ci.KeyFileError("movable.sed can't be found at x."))
-    assert shown == ["movable.sed can't be found at x."]
+    message = ("movable.sed can't be found at x. If it was on a card or drive that was removed or got a different "
+               "drive letter, choose it again (on the command line, pass the right path with -m).")
+    _, shown = run_gui_start_install(monkeypatch, '', ci.KeyFileError(message))
+    assert shown == [message]
     _, shown = run_gui_start_install(monkeypatch, '', FileNotFoundError('nope'))
     assert shown == ['Could not start the install: FileNotFoundError: nope']
 
