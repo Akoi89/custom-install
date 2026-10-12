@@ -25,7 +25,9 @@ The fixes were made with Claude (Anthropic) doing the code reading and the chang
 
 ### Windows standalone
 
-This fork has no standalone build. The releases page of the original project only has the old 2.1 build, and it doesn't have these fixes. Use the Python install below, it works on Windows too.
+Download `custom-install-standalone.zip` from the releases page of this fork, unzip it, and run `ci-gui.exe`. Python is bundled, so there is nothing else to install. The original project's old 2.1 build on its releases page doesn't have these fixes.
+
+Put `boot9.bin`, `seeddb.bin` and `movable.sed` in the same folder as `ci-gui.exe` and the GUI picks them up on its own. `ci-gui-console.exe` is the same program with a console window that shows errors, and `custominstall.exe` is the command-line version.
 
 ### With installed Python
 
@@ -98,8 +100,13 @@ Linux users may need to install a Tk package:
 
 ### Building Windows standalone
 
-> [!WARNING]
-> This section is OUTDATED and currently does not work with the Python package setup.
+This needs 64-bit Windows Python 3 (the python.org installer, with its default tcl/tk) and PowerShell. From the repo folder:
+
+```
+powershell -ExecutionPolicy Bypass -File standalone\make-standalone.ps1
+```
+
+It makes a virtual environment in `build\standalone-venv`, installs cx_Freeze and this package into it, freezes the three exes into `build\custom-install-standalone`, and zips that folder to `dist\custom-install-standalone.zip`. Pass `-Venv <folder>` to use another environment. `standalone\setup-cxfreeze.py` is the cx_Freeze script it runs.
 
 ## Troubleshooting
 
@@ -109,7 +116,7 @@ Linux users may need to install a Tk package:
 - **"Access is denied" or "Couldn't run save3ds_fuse"**: Antivirus or security software is probably blocking save3ds_fuse. On macOS and Linux, make sure the file is executable (`chmod +x`).
 - **WinError 1117 or other I/O errors while writing**: This points to a fault with the SD card or the card reader. Test the card (H2testw on Windows, F3 on macOS and Linux) and try another reader.
 - **"CIFINISH magic not found", or custom-install-finalize showing up as unknown homebrew**: The file system on the SD card is probably damaged, often from removing the card without ejecting it. Check the card, delete `cifinish.bin` from it, and run custom-install again.
-- **"0xc000007b" when starting ci-gui**: That's the old standalone build. Use the Python install instead.
+- **"0xc000007b" when starting ci-gui**: That's the original project's old 2.1 standalone build. Use this fork's standalone zip or the Python install instead.
 - **"Failed to finish ticket install: d8e08019" in custom-install-finalize**: I haven't confirmed the cause. One report links it to a game made only for the New 3DS being installed on an older model.
 
 ## License/Credits

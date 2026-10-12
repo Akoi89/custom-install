@@ -39,13 +39,14 @@ is_windows = sys.platform == 'win32'
 taskbar = None
 file_parent = dirname(abspath(__file__))
 if is_windows:
-    if frozen:
-        # attempt to fix loading tcl/tk when running from a path with non-latin characters
-        environ['TCL_LIBRARY'] = 'lib/tkinter/tcl8.6'
+    # TCL_LIBRARY is not set here for frozen builds: cx_Freeze sets it to an absolute path when tkinter is
+    # imported, which also works from a folder with non-latin characters
     try:
         import comtypes.client as cc
 
-        tbl = cc.GetModule(join(file_parent, 'TaskbarLib.tlb'))
+        # the frozen build copies the type library next to the exe and removes the copy in the package folder
+        tlb_dir = dirname(sys.executable) if frozen else file_parent
+        tbl = cc.GetModule(join(tlb_dir, 'TaskbarLib.tlb'))
 
         taskbar = cc.CreateObject('{56FDF344-FD6D-11D0-958A-006097C9A090}', interface=tbl.ITaskbarList3)
         taskbar.HrInit()

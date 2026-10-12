@@ -1,4 +1,4 @@
-After installing with the Python steps in the README, run `py -3 -m custominstall.gui` to bring up the custom-install gui.
+Run ci-gui.exe to bring up the custom-install gui. If you installed with the Python steps in the README instead, run `py -3 -m custominstall.gui`.
 Select your SD card root, boot9, seeddb, and movable.sed files.
 In some cases these will be automatically selected for you.
 
