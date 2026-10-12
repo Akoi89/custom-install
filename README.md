@@ -11,7 +11,7 @@ What's different in this fork:
 - **Reinstalling is safer.** The old copy is moved aside and only deleted once the new one is in place, so a crash or a pulled SD card midway doesn't leave you with nothing.
 - **One bad title doesn't stop the batch.** The rest still install and finalize still gets copied to the SD card. A title whose database entry couldn't be added is no longer slipped in by the next title while being reported as failed.
 - **The GUI doesn't get stuck with every button greyed out** after a wrong movable.sed or SD card. The command line gives a proper error and exit code instead of a Python crash.
-- **Clearer SD card errors.** It says when MSET9 is still set up instead of only failing to find a folder, picks the right console folder when a card has several and only one has games installed, and explains when save3ds_fuse can't be started (usually antivirus).
+- **Clearer SD card errors.** It says when MSET9 is still set up instead of only failing to find a folder, picks the right console folder when a card has several and only one has a title database, and explains when save3ds_fuse can't be started (usually antivirus).
 - **custom-install-finalize keeps going** when one title fails, and keeps the unfinished ones in cifinish.bin so you can run it again. These finalize changes are in the source only; the bundled `custom-install-finalize.3dsx` is still the original until I've tested the new one on a 3DS.
 
 None of this has been run on a real 3DS yet. It passes an automated test suite and the finalize program builds cleanly, but that's all. If you try it, I'd like to hear how it went in this fork's issues.
@@ -104,7 +104,7 @@ Linux users may need to install a Tk package:
 ## Troubleshooting
 
 - **"MSET9 is still set up on this SD card"**: Run the MSET9 script again and choose "5. Remove MSET9", then try again. The original custom-install reports this as "Could not find a suitable id1 directory".
-- **"Could not find a suitable id1 directory"**: The folder that holds this console's data on the SD card is missing or was renamed. If you or a tool renamed it, rename it back first, because installing into a fresh folder would hide the games already on the card. If the card is new or was formatted, put it in the 3DS and turn it on once, then retry.
+- **"Could not find a suitable id1 directory"**: The folder that holds this console's data on the SD card is missing or was renamed. If you or a tool renamed it, rename it back first, because installing into a fresh folder would hide the games already on the card. If the folder was deleted rather than renamed, put the card in the 3DS and turn it on once, then retry.
 - **"There are multiple id1 directories"**: This fork uses the folder that has a title database when only one of them does. If it still stops, back up the folders that aren't in use and remove them.
 - **"Access is denied" or "Couldn't run save3ds_fuse"**: Antivirus or security software is probably blocking save3ds_fuse. On macOS and Linux, make sure the file is executable (`chmod +x`).
 - **WinError 1117 or other I/O errors while writing**: This points to a fault with the SD card or the card reader. Test the card (H2testw on Windows, F3 on macOS and Linux) and try another reader.
