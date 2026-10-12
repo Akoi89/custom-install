@@ -723,3 +723,43 @@ def test_main_reports_sd_path_error_and_exits_1(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert message in captured.out
     assert 'Traceback' not in captured.out + captured.err
+
+
+# ---------------------------------------------------------------------------
+# save3ds_fuse cannot be started
+
+def test_extract_cannot_start_save3ds_fuse(tmp_path, monkeypatch):
+    sd, _ = make_sd(tmp_path)
+    fuse = tmp_path / 'save3ds_fuse'
+    fuse.write_bytes(b'')
+    monkeypatch.setattr(ci, 'save3ds_fuse_path', str(fuse))
+
+    def blocked(*args, **kwargs):
+        raise PermissionError(5, 'Access is denied')
+
+    monkeypatch.setattr(ci.subprocess, 'run', blocked)
+
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=True)
+    assert installer.start() == (None, False, 0)
+
+    assert any(l.startswith("Error: Couldn't run save3ds_fuse at " + str(fuse)) and 'Access is denied' in l
+               for l in installer.log_lines)
+    assert any(l.startswith('Error: ') and 'antivirus or security software' in l for l in installer.log_lines)
+
+
+def test_import_cannot_start_save3ds_fuse_fails_only_that_title(tmp_path, monkeypatch):
+    def blocked():
+        raise PermissionError(5, 'Access is denied')
+
+    installers = []
+    result, application_count, imports = run_with_existing_database(
+        tmp_path, monkeypatch, blocked, lambda installer, imports: installers.append(installer))
+
+    assert len(result['failed']) == 1 and TID_A in result['failed'][0]
+    assert len(result['installed']) == 1 and TID_B in result['installed'][0]
+    assert any(l.startswith("Error: Couldn't run save3ds_fuse at") and 'Access is denied' in l
+               for l in installers[0].log_lines)
+    assert any('antivirus or security software' in l for l in installers[0].log_lines)
+    # the entry of the failed title is back as it was for the next import
+    assert imports[1][TID_A] == b'OLD-A'
+    assert application_count == 3

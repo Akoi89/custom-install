@@ -309,6 +309,11 @@ class CustomInstall:
         free_space = get_free_space(self.sd)
         return total_size, free_space
 
+    def log_save3ds_fuse_error(self, error):
+        self.log(f"Couldn't run save3ds_fuse at {save3ds_fuse_path}: {error}", 2)
+        self.log("This usually means antivirus or security software is blocking it, "
+                 "or on macOS/Linux that the file isn't executable (chmod +x).", 2)
+
     def check_for_id0(self):
         sd_path = join(self.sd, 'Nintendo 3DS', self.crypto.id0.hex())
         return isdir(sd_path)
@@ -422,11 +427,15 @@ class CustomInstall:
 
             # extract the title database to add our own entry to
             self.log('Extracting Title Database...')
-            out = subprocess.run(save3ds_fuse_common_args + ['-x'],
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.STDOUT,
-                                 encoding='utf-8',
-                                 **extra_kwargs)
+            try:
+                out = subprocess.run(save3ds_fuse_common_args + ['-x'],
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT,
+                                     encoding='utf-8',
+                                     **extra_kwargs)
+            except OSError as e:
+                self.log_save3ds_fuse_error(e)
+                return None, False, 0
             if out.returncode:
                 for l in out.stdout.split('\n'):
                     self.log(l)
@@ -685,11 +694,16 @@ class CustomInstall:
 
                     # import the directory, now including our title
                     self.log('Importing into Title Database...')
-                    out = subprocess.run(save3ds_fuse_common_args + ['-i'],
-                                         stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT,
-                                         encoding='utf-8',
-                                         **extra_kwargs)
+                    try:
+                        out = subprocess.run(save3ds_fuse_common_args + ['-i'],
+                                             stdout=subprocess.PIPE,
+                                             stderr=subprocess.STDOUT,
+                                             encoding='utf-8',
+                                             **extra_kwargs)
+                    except OSError as e:
+                        self.log_save3ds_fuse_error(e)
+                        # the handler below marks this title failed and restores the info entry
+                        raise
                     if out.returncode:
                         for l in out.stdout.split('\n'):
                             self.log(l)
