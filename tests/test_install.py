@@ -262,6 +262,10 @@ class FakeRun:
     args = []
 
 
+# start() accepts a boot9 of the size pyctr accepts, so the fake one has it
+BOOT9_DATA = b'boot9'.ljust(0x8000, b'\0')
+
+
 def make_sd(tmp_path):
     sd = tmp_path / 'sd'
     id1_root = sd / 'Nintendo 3DS' / ID0.hex() / ID1
@@ -284,7 +288,7 @@ def make_installer(sd, readers, skip_contents, crypto=None):
     # start() checks that these exist and gives save3ds_fuse copies of them
     keys = sd.parent / 'keys'
     keys.mkdir(exist_ok=True)
-    (keys / 'boot9.bin').write_bytes(b'boot9')
+    (keys / 'boot9.bin').write_bytes(BOOT9_DATA)
     (keys / 'movable.sed').write_bytes(b'movable')
     installer.crypto.b9_path = str(keys / 'boot9.bin')
     installer.boot9 = installer.crypto.b9_path
@@ -534,7 +538,6 @@ def test_prepare_titles_skips_missing_seed(monkeypatch):
     assert not any("Couldn't read" in l for l in installer.log_lines)
 
 
-
 def test_chosen_boot9_is_used_when_the_first_loaded_one_is_gone(tmp_path, monkeypatch):
     # pyctr keeps the path of the first boot9 it loaded, so crypto.b9_path can point at a removed card
     # even after the user chose another boot9
@@ -547,7 +550,8 @@ def test_chosen_boot9_is_used_when_the_first_loaded_one_is_gone(tmp_path, monkey
     installer.crypto.b9_path = str(tmp_path / 'removed-card' / 'boot9.bin')
     chosen = tmp_path / 'chosen' / 'boot9.bin'
     chosen.parent.mkdir()
-    chosen.write_bytes(b'chosen boot9')
+    chosen_data = b'chosen boot9'.ljust(0x8000, b'\0')
+    chosen.write_bytes(chosen_data)
     installer.boot9 = str(chosen)
     runs = []
 
@@ -563,10 +567,13 @@ def test_chosen_boot9_is_used_when_the_first_loaded_one_is_gone(tmp_path, monkey
     result, _, _ = installer.start()
 
     assert len(result['installed']) == 1 and not result['failed']
-    assert runs and all(data == b'chosen boot9' and path != str(chosen) for path, data in runs)
+    assert runs and all(data == chosen_data and path != str(chosen) for path, data in runs)
 
 
 def test_init_keeps_the_boot9_that_was_passed(tmp_path, monkeypatch):
+    movable = tmp_path / 'movable.sed'
+    movable.write_bytes(b'movable')
+
     class StubCrypto:
         b9_path = 'first-loaded/boot9.bin'
 
@@ -577,22 +584,11 @@ def test_init_keeps_the_boot9_that_was_passed(tmp_path, monkeypatch):
             pass
 
     monkeypatch.setattr(ci, 'CryptoEngine', StubCrypto)
-    chosen = ci.CustomInstall(movable='movable.sed', sd='sd', boot9='chosen/boot9.bin')
+    chosen = ci.CustomInstall(movable=str(movable), sd='sd', boot9='chosen/boot9.bin')
     assert chosen.boot9 == 'chosen/boot9.bin'
-    fallback = ci.CustomInstall(movable='movable.sed', sd='sd')
+    fallback = ci.CustomInstall(movable=str(movable), sd='sd')
     assert fallback.boot9 == 'first-loaded/boot9.bin'
 
-
-def test_missing_movable_stops_before_touching_the_sd(tmp_path, fake_tools):
-    sd, id1_root = make_sd(tmp_path)
-    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
-    os.remove(installer.movable)
-
-    with pytest.raises(ci.KeyFileError, match='movable.sed is no longer at'):
-        installer.start()
-
-    assert (id1_root / 'dbs' / 'title.db').read_bytes() == b'not a real database'
-    assert not (id1_root / 'title').exists()
 
 # ---------------------------------------------------------------------------
 # main() (T6)
@@ -892,6 +888,109 @@ def test_missing_boot9_stops_before_touching_the_sd(tmp_path, fake_tools):
     assert not (id1_root / 'title').exists()
 
 
+def test_missing_movable_stops_before_touching_the_sd(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
+    os.remove(installer.movable)
+
+    with pytest.raises(ci.KeyFileError, match='movable.sed is no longer at'):
+        installer.start()
+
+    assert (id1_root / 'dbs' / 'title.db').read_bytes() == b'not a real database'
+    assert not (id1_root / 'title').exists()
+
+
+def test_wrong_size_boot9_stops_before_touching_the_sd(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
+    # a file that is there but is not a boot9 dump, such as the wrong file picked in the GUI
+    with open(installer.boot9, 'wb') as f:
+        f.write(b'boot9'.ljust(0x4000, b'\0'))
+
+    with pytest.raises(ci.KeyFileError, match="doesn't look like a boot9 dump"):
+        installer.start()
+
+    assert (id1_root / 'dbs' / 'title.db').read_bytes() == b'not a real database'
+    assert not (id1_root / 'title').exists()
+
+
+def test_boot9_of_either_dump_size_is_accepted(tmp_path, fake_tools):
+    for size in (0x8000, 0x10000):
+        sd, _ = make_sd(tmp_path / str(size))
+        installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=True)
+        with open(installer.boot9, 'wb') as f:
+            f.write(b'boot9'.ljust(size, b'\0'))
+        result, _, _ = installer.start()
+        assert len(result['installed']) == 1
+
+
+def test_missing_movable_at_start_up_is_a_key_file_error(tmp_path):
+    with pytest.raises(ci.KeyFileError, match="movable.sed can't be found at") as excinfo:
+        ci.CustomInstall(movable=str(tmp_path / 'gone' / 'movable.sed'), sd=str(tmp_path / 'sd'))
+    assert 'with -m' in str(excinfo.value)
+
+
+def test_main_reports_missing_movable_and_exits_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, 'argv', ['custominstall', '-m', str(tmp_path / 'gone.sed'), '--sd', str(tmp_path), 'a.cia'])
+    with pytest.raises(SystemExit) as excinfo:
+        ci.main()
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert "movable.sed can't be found at" in captured.out
+    assert 'Traceback' not in captured.out + captured.err
+
+
+class StubTextbox:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self, start, end):
+        return self.value
+
+
+def run_gui_start_install(monkeypatch, boot9, error):
+    # start_install only needs these parts of the window, so it runs without a display
+    pytest.importorskip('tkinter')
+    from custominstall import gui
+
+    created = []
+    shown = []
+
+    def fake_custom_install(**kwargs):
+        created.append(kwargs)
+        raise error
+
+    monkeypatch.setattr(gui, 'CustomInstall', fake_custom_install)
+    monkeypatch.setattr(gui, 'taskbar', None)
+    window = SimpleNamespace(
+        file_picker_textboxes={'sd': StubTextbox('sd'), 'seeddb': StubTextbox('seeddb.bin'),
+                               'movable.sed': StubTextbox('movable.sed'), 'boot9': StubTextbox(boot9)},
+        readers={'a.cia': object()},
+        skip_contents_var=SimpleNamespace(get=lambda: 0),
+        overwrite_saves_var=SimpleNamespace(get=lambda: 0),
+        update_status=lambda *args: None,
+        disable_buttons=lambda: None,
+        enable_buttons=lambda: None,
+        show_error=shown.append)
+    gui.CustomInstallGUI.start_install(window)
+    return created, shown
+
+
+def test_gui_passes_no_boot9_when_the_box_is_empty(monkeypatch):
+    created, _ = run_gui_start_install(monkeypatch, '', RuntimeError('stop'))
+    assert created[0]['boot9'] is None
+    created, _ = run_gui_start_install(monkeypatch, 'chosen/boot9.bin', RuntimeError('stop'))
+    assert created[0]['boot9'] == 'chosen/boot9.bin'
+
+
+def test_gui_shows_a_key_file_error_as_it_is_worded(monkeypatch):
+    _, shown = run_gui_start_install(monkeypatch, '', ci.KeyFileError("movable.sed can't be found at x."))
+    assert shown == ["movable.sed can't be found at x."]
+    _, shown = run_gui_start_install(monkeypatch, '', FileNotFoundError('nope'))
+    assert shown == ['Could not start the install: FileNotFoundError: nope']
+
+
 def test_save3ds_fuse_keeps_working_when_the_boot9_drive_goes_away(tmp_path, monkeypatch):
     sd, _ = make_sd(tmp_path)
     fuse = tmp_path / 'save3ds_fuse'
@@ -922,5 +1021,5 @@ def test_save3ds_fuse_keeps_working_when_the_boot9_drive_goes_away(tmp_path, mon
     assert len(result['installed']) == 2 and not result['failed']
     # one extract and one import per title, all with readable copies, never the original paths
     assert len(runs) == 3
-    assert all(b == b'boot9' and m == b'movable' for _, _, b, m in runs)
+    assert all(b == BOOT9_DATA and m == b'movable' for _, _, b, m in runs)
     assert all(bp != original_boot9 and mp != original_movable for bp, mp, _, _ in runs)

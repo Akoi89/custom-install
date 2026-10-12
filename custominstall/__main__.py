@@ -11,7 +11,7 @@ from enum import Enum
 from glob import glob
 import gzip
 from os import makedirs, remove, rename, scandir, environ
-from os.path import basename, dirname, join, isdir, isfile
+from os.path import basename, dirname, getsize, join, isdir, isfile
 from random import randint
 from hashlib import sha256
 from pprint import pformat
@@ -240,6 +240,11 @@ class CustomInstall:
         self.event = Events()
         self.log_lines = []  # Stores all info messages for user to view
 
+        if not (movable and isfile(movable)):
+            raise KeyFileError(f"movable.sed can't be found at {movable}. If it was on a card or drive that was "
+                               f'removed or got a different drive letter, choose it again, or pass the right '
+                               f'path with -m.')
+
         self.crypto = CryptoEngine(boot9=boot9)
         self.crypto.setup_sd_key_from_file(movable)
         self.seeddb = seeddb
@@ -349,10 +354,14 @@ class CustomInstall:
 
         # custom-install read boot9 and movable.sed when it started, but save3ds_fuse reads them again, and the
         # card or drive they were on may be gone by now
-        for name, key_path in (('boot9', self.boot9), ('movable.sed', self.movable)):
+        for name, flag, key_path in (('boot9', '-b', self.boot9), ('movable.sed', '-m', self.movable)):
             if not (key_path and isfile(key_path)):
                 raise KeyFileError(f'{name} is no longer at {key_path}. If it was on a card or drive that was '
-                                   f'removed or got a different drive letter, choose it again.')
+                                   f'removed or got a different drive letter, choose it again, or pass the right '
+                                   f'path with {flag}.')
+        # the sizes pyctr accepts for a boot9 dump (setup_keys_from_boot9_file)
+        if getsize(self.boot9) not in (0x8000, 0x10000):
+            raise KeyFileError(f"{self.boot9} doesn't look like a boot9 dump (wrong size).")
 
         crypto = self.crypto
         # TODO: Move a lot of these into their own methods
@@ -878,13 +887,17 @@ def main():
     print(f'custom-install {__version__} - https://github.com/ihaveamac/custom-install')
     args = parser.parse_args()
 
-    installer = CustomInstall(boot9=args.boot9,
-                              seeddb=args.seeddb,
-                              movable=args.movable,
-                              sd=args.sd,
-                              overwrite_saves=args.overwrite_saves,
-                              cifinish_out=args.cifinish_out,
-                              skip_contents=(args.skip_contents or False))
+    try:
+        installer = CustomInstall(boot9=args.boot9,
+                                  seeddb=args.seeddb,
+                                  movable=args.movable,
+                                  sd=args.sd,
+                                  overwrite_saves=args.overwrite_saves,
+                                  cifinish_out=args.cifinish_out,
+                                  skip_contents=(args.skip_contents or False))
+    except KeyFileError as e:
+        print(f'Error: {e}')
+        sys.exit(1)
 
     def log_handle(msg, end='\n'):
         print(msg, end=end)
