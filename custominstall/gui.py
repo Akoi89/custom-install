@@ -672,6 +672,7 @@ class CustomInstallGUI(ttk.Frame):
         sd_root = self.file_picker_textboxes['sd'].get('1.0', tk.END).strip()
         seeddb = self.file_picker_textboxes['seeddb'].get('1.0', tk.END).strip()
         movable_sed = self.file_picker_textboxes['movable.sed'].get('1.0', tk.END).strip()
+        boot9 = self.file_picker_textboxes['boot9'].get('1.0', tk.END).strip()
 
         if not sd_root:
             self.show_error('SD root is not specified.')
@@ -698,6 +699,7 @@ class CustomInstallGUI(ttk.Frame):
 
         try:
             installer = CustomInstall(movable=movable_sed,
+                                      boot9=boot9 or None,
                                       sd=sd_root,
                                       skip_contents=self.skip_contents_var.get() == 1,
                                       overwrite_saves=self.overwrite_saves_var.get() == 1)
@@ -791,8 +793,8 @@ class CustomInstallGUI(ttk.Frame):
                 if result:
                     self.call_on_main(show_results)(result, copied_3dsx, application_count)
                 elif result is None:
-                    self.call_on_main(self.show_error)("save3ds_fuse couldn't read the title database on the SD card.\n"
-                                                       "Its error message is in the console window.")
+                    self.call_on_main(self.show_error)("save3ds_fuse couldn't be run or couldn't read the title database on the SD card.\n"
+                                                       "The details are in the console window.")
                     self.call_on_main(self.open_console)()
             except:
                 installer.event.on_error(sys.exc_info())

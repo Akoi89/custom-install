@@ -249,6 +249,9 @@ class CustomInstall:
         self.overwrite_saves = overwrite_saves
         self.cifinish_out = cifinish_out
         self.movable = movable
+        # the boot9 file the user chose. pyctr keeps the path of the first boot9 it loaded in this process, so
+        # crypto.b9_path can point at a file that is gone even after the user chose another one
+        self.boot9 = boot9 or self.crypto.b9_path
 
     def copy_with_progress(self, src: BinaryIO, dst: BinaryIO, size: int, path: str, fire_event: bool = True):
         left = size
@@ -346,7 +349,7 @@ class CustomInstall:
 
         # custom-install read boot9 and movable.sed when it started, but save3ds_fuse reads them again, and the
         # card or drive they were on may be gone by now
-        for name, key_path in (('boot9', self.crypto.b9_path), ('movable.sed', self.movable)):
+        for name, key_path in (('boot9', self.boot9), ('movable.sed', self.movable)):
             if not (key_path and isfile(key_path)):
                 raise KeyFileError(f'{name} is no longer at {key_path}. If it was on a card or drive that was '
                                    f'removed or got a different drive letter, choose it again.')
@@ -436,10 +439,10 @@ class CustomInstall:
             # during the batch (or a drive letter that changes) can't make every later title fail
             keys_dir = join(workdir, 'keys')
             makedirs(keys_dir)
-            boot9_copy = join(keys_dir, basename(crypto.b9_path))
+            boot9_copy = join(keys_dir, basename(self.boot9))
             movable_copy = join(keys_dir, 'movable.sed')
             try:
-                copyfile(crypto.b9_path, boot9_copy)
+                copyfile(self.boot9, boot9_copy)
                 copyfile(self.movable, movable_copy)
             except OSError as e:
                 raise KeyFileError(f"Couldn't read boot9 or movable.sed: {e}") from e

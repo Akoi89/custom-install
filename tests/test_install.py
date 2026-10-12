@@ -287,6 +287,7 @@ def make_installer(sd, readers, skip_contents, crypto=None):
     (keys / 'boot9.bin').write_bytes(b'boot9')
     (keys / 'movable.sed').write_bytes(b'movable')
     installer.crypto.b9_path = str(keys / 'boot9.bin')
+    installer.boot9 = installer.crypto.b9_path
     installer.movable = str(keys / 'movable.sed')
     return installer
 
@@ -532,6 +533,66 @@ def test_prepare_titles_skips_missing_seed(monkeypatch):
     assert 'Skipping seed_missing.cia - seed not found, update seeddb.bin' in installer.log_lines
     assert not any("Couldn't read" in l for l in installer.log_lines)
 
+
+
+def test_chosen_boot9_is_used_when_the_first_loaded_one_is_gone(tmp_path, monkeypatch):
+    # pyctr keeps the path of the first boot9 it loaded, so crypto.b9_path can point at a removed card
+    # even after the user chose another boot9
+    sd, _ = make_sd(tmp_path)
+    fuse = tmp_path / 'save3ds_fuse'
+    fuse.write_bytes(b'')
+    monkeypatch.setattr(ci, 'save3ds_fuse_path', str(fuse))
+
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=True)
+    installer.crypto.b9_path = str(tmp_path / 'removed-card' / 'boot9.bin')
+    chosen = tmp_path / 'chosen' / 'boot9.bin'
+    chosen.parent.mkdir()
+    chosen.write_bytes(b'chosen boot9')
+    installer.boot9 = str(chosen)
+    runs = []
+
+    def fake_run(args, **kwargs):
+        boot9 = args[args.index('-b') + 1]
+        with open(boot9, 'rb') as b:
+            runs.append((boot9, b.read()))
+        run = FakeRun()
+        run.args = args
+        return run
+
+    monkeypatch.setattr(ci.subprocess, 'run', fake_run)
+    result, _, _ = installer.start()
+
+    assert len(result['installed']) == 1 and not result['failed']
+    assert runs and all(data == b'chosen boot9' and path != str(chosen) for path, data in runs)
+
+
+def test_init_keeps_the_boot9_that_was_passed(tmp_path, monkeypatch):
+    class StubCrypto:
+        b9_path = 'first-loaded/boot9.bin'
+
+        def __init__(self, boot9=None):
+            pass
+
+        def setup_sd_key_from_file(self, path):
+            pass
+
+    monkeypatch.setattr(ci, 'CryptoEngine', StubCrypto)
+    chosen = ci.CustomInstall(movable='movable.sed', sd='sd', boot9='chosen/boot9.bin')
+    assert chosen.boot9 == 'chosen/boot9.bin'
+    fallback = ci.CustomInstall(movable='movable.sed', sd='sd')
+    assert fallback.boot9 == 'first-loaded/boot9.bin'
+
+
+def test_missing_movable_stops_before_touching_the_sd(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
+    os.remove(installer.movable)
+
+    with pytest.raises(ci.KeyFileError, match='movable.sed is no longer at'):
+        installer.start()
+
+    assert (id1_root / 'dbs' / 'title.db').read_bytes() == b'not a real database'
+    assert not (id1_root / 'title').exists()
 
 # ---------------------------------------------------------------------------
 # main() (T6)
