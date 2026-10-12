@@ -533,6 +533,8 @@ def test_prepare_titles_skips_missing_seed(monkeypatch):
 class FakeInstaller:
     id0_found = True
     start_result = ({'installed': [], 'failed': []}, False, 0)
+    start_error = None
+    calls = []
 
     def __init__(self, **kwargs):
         self.event = Events()
@@ -541,6 +543,8 @@ class FakeInstaller:
 
     def log(self, message, mtype=0, errorname=None, end='\n'):
         self.logged.append(message)
+        self.calls.append((message, mtype))
+        self.event.on_log_msg(message, end=end)
 
     def check_for_id0(self):
         return self.id0_found
@@ -552,6 +556,8 @@ class FakeInstaller:
         return 0, 1
 
     def start(self):
+        if self.start_error:
+            raise self.start_error
         return self.start_result
 
 
@@ -600,3 +606,120 @@ def test_copy_with_progress_stops_on_truncated_input():
     assert dst.getvalue() == b'abc'
     assert digest == sha256(b'abc').digest()
     assert digest != sha256(b'abc' + b'\0' * 7).digest()
+
+
+# ---------------------------------------------------------------------------
+# MSET9 and several id1 folders
+
+ID2 = '22' * 16
+MSET9_HINT = 'choose "5. Remove MSET9"'
+
+
+def add_id1(sd, name, with_db):
+    folder = sd / 'Nintendo 3DS' / ID0.hex() / name
+    (folder / 'dbs').mkdir(parents=True)
+    if with_db:
+        (folder / 'dbs' / 'title.db').write_bytes(b'not a real database')
+    return folder
+
+
+def test_mset9_renamed_real_id1_is_detected(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    renamed = id1_root.with_name(ID1 + '_user-id1')
+    id1_root.rename(renamed)
+
+    installer = make_installer(sd, [], skip_contents=True)
+    with pytest.raises(ci.SDPathError) as excinfo:
+        installer.start()
+
+    assert MSET9_HINT in str(excinfo.value)
+    assert ID1 + '_user-id1' in str(excinfo.value)
+
+
+def test_mset9_hacked_id1_is_detected(tmp_path, fake_tools):
+    sd, _ = make_sd(tmp_path)
+    hacked = 'ab' + 'sdmc' + 'x' * 26
+    assert len(hacked) == 32
+    add_id1(sd, hacked, with_db=False)
+
+    installer = make_installer(sd, [], skip_contents=True)
+    with pytest.raises(ci.SDPathError) as excinfo:
+        installer.start()
+
+    assert MSET9_HINT in str(excinfo.value)
+    assert hacked in str(excinfo.value)
+
+
+def test_normal_id1_is_not_taken_for_mset9(tmp_path, fake_tools):
+    sd, _ = make_sd(tmp_path)
+    # a 32 character name without "sdmc" and other folders next to the id1 are not MSET9
+    add_id1(sd, 'z' * 32, with_db=False)
+    add_id1(sd, 'backup-of-something', with_db=False)
+
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=True)
+    result, _, _ = installer.start()
+
+    assert result['installed'] and not result['failed']
+
+
+def test_multiple_id1_uses_the_one_with_a_title_database(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    # the first id1 has no database, the second one does
+    (id1_root / 'dbs' / 'title.db').unlink()
+    other = add_id1(sd, ID2, with_db=True)
+
+    installer = make_installer(sd, [FakeReader(TID_A)], skip_contents=False)
+    result, _, _ = installer.start()
+
+    assert result['installed'] and not result['failed']
+    assert (other / 'title' / '00040000' / '00012345' / 'content' / '00000000.app').is_file()
+    assert not (id1_root / 'title').exists()
+    warnings = [l for l in installer.log_lines if l.startswith('Warning: ')]
+    assert len(warnings) == 1 and ID2 in warnings[0] and ID1 in warnings[0]
+
+
+def test_multiple_id1_with_two_databases_is_an_error_listing_both(tmp_path, fake_tools):
+    sd, _ = make_sd(tmp_path)
+    add_id1(sd, ID2, with_db=True)
+
+    installer = make_installer(sd, [], skip_contents=True)
+    with pytest.raises(ci.SDPathError) as excinfo:
+        installer.start()
+
+    assert 'multiple id1 directories' in str(excinfo.value)
+    assert ID1 in str(excinfo.value) and ID2 in str(excinfo.value)
+
+
+def test_multiple_id1_without_any_database_is_an_error_listing_both(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    (id1_root / 'dbs' / 'title.db').unlink()
+    add_id1(sd, ID2, with_db=False)
+
+    installer = make_installer(sd, [], skip_contents=True)
+    with pytest.raises(ci.SDPathError) as excinfo:
+        installer.start()
+
+    assert 'multiple id1 directories' in str(excinfo.value)
+    assert ID1 in str(excinfo.value) and ID2 in str(excinfo.value)
+
+
+def test_no_id1_is_still_an_error(tmp_path, fake_tools):
+    sd, id1_root = make_sd(tmp_path)
+    ci.rmtree(id1_root)
+
+    installer = make_installer(sd, [], skip_contents=True)
+    with pytest.raises(ci.SDPathError, match='Could not find a suitable id1 directory'):
+        installer.start()
+
+
+def test_main_reports_sd_path_error_and_exits_1(monkeypatch, capsys):
+    message = 'MSET9 is still set up on this SD card (found x). ' + MSET9_HINT
+    calls = []
+    with pytest.raises(SystemExit) as excinfo:
+        run_main(monkeypatch, start_error=ci.SDPathError(message), calls=calls)
+
+    assert excinfo.value.code == 1
+    assert calls == [(message, 2)]
+    captured = capsys.readouterr()
+    assert message in captured.out
+    assert 'Traceback' not in captured.out + captured.err

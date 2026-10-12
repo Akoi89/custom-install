@@ -339,8 +339,17 @@ class CustomInstall:
         self.log("Finding path to install to...")
         [sd_path, id1s] = self.get_sd_path()
         if len(id1s) > 1:
-            raise SDPathError(f'There are multiple id1 directories for id0 {crypto.id0.hex()}, '
-                              f'please remove extra directories')
+            # a leftover id1 from another console or an old setup usually has no title database
+            with_db = [name for name in id1s if isfile(join(sd_path, name, 'dbs', 'title.db'))]
+            if len(with_db) == 1:
+                others = [name for name in id1s if name != with_db[0]]
+                self.log(f'There are multiple id1 directories for id0 {crypto.id0.hex()}. '
+                         f'Using {with_db[0]} because it is the only one with a title database. '
+                         f'The others are not used: {", ".join(others)}', 1)
+                id1s = with_db
+            else:
+                raise SDPathError(f'There are multiple id1 directories for id0 {crypto.id0.hex()}, '
+                                  f'please remove extra directories: {", ".join(id1s)}')
         elif len(id1s) == 0:
             raise SDPathError(f'Could not find a suitable id1 directory for id0 {crypto.id0.hex()}')
         id1 = id1s[0]
@@ -750,17 +759,27 @@ class CustomInstall:
 
     def get_sd_path(self):
         sd_path = join(self.sd, 'Nintendo 3DS', self.crypto.id0.hex())
+        names = sorted(d.name for d in scandir(sd_path) if d.is_dir())
+
+        # While MSET9 is set up, the real id1 is renamed with this ending and a hacked id1 is added,
+        # which is 32 characters long and has "sdmc" in the name.
+        for name in names:
+            if name.endswith('_user-id1') or (len(name) == 32 and 'sdmc' in name):
+                raise SDPathError(f'MSET9 is still set up on this SD card (found {name}). '
+                                  f'Run the MSET9 script again and choose "5. Remove MSET9" '
+                                  f'before using custom-install.')
+
         id1s = []
-        for d in scandir(sd_path):
-            if d.is_dir() and len(d.name) == 32:
+        for name in names:
+            if len(name) == 32:
                 try:
                     # check if the name can be converted to hex
                     # I'm not sure what the 3DS does if there is a folder that is not a 32-char hex string.
-                    bytes.fromhex(d.name)
+                    bytes.fromhex(name)
                 except ValueError:
                     continue
                 else:
-                    id1s.append(d.name)
+                    id1s.append(name)
         return [sd_path, id1s]
 
     def log(self, message, mtype=0, errorname=None, end='\n'):
@@ -842,7 +861,11 @@ def main():
                                        f'Free space: {free_space / (1024 * 1024):0.2f} MiB')
             sys.exit(1)
 
-    result, copied_3dsx, application_count = installer.start()
+    try:
+        result, copied_3dsx, application_count = installer.start()
+    except SDPathError as e:
+        installer.log(str(e), 2)
+        sys.exit(1)
     if application_count >= 300:
         installer.log(f'\n\nWarning: {application_count} installed applications were detected.\n'
                       f'The HOME Menu will only show 300 icons.\n'
