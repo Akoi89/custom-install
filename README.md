@@ -12,9 +12,9 @@ What's different in this fork:
 - **One bad title doesn't stop the batch.** The rest still install and finalize still gets copied to the SD card. A title whose database entry couldn't be added is no longer slipped in by the next title while being reported as failed.
 - **The GUI doesn't get stuck with every button greyed out** after a wrong movable.sed or SD card. The command line gives a proper error and exit code instead of a Python crash.
 - **Clearer SD card errors.** It says when MSET9 is still set up instead of only failing to find a folder, stops before writing anything when other folders sit next to the console folder (save3ds_fuse could update the wrong one) and says which one to keep, and explains when save3ds_fuse can't be started (usually antivirus).
-- **custom-install-finalize keeps going** when one title fails, and keeps the unfinished ones in cifinish.bin so you can run it again. These finalize changes are in the source only; the bundled `custom-install-finalize.3dsx` is still the original until I've tested the new one on a 3DS.
+- **custom-install-finalize keeps going** when one title fails, and keeps the unfinished ones in cifinish.bin so you can run it again. The bundled `custom-install-finalize.3dsx` is this new version, 1.7.
 
-None of this has been run on a real 3DS yet. It passes an automated test suite and the finalize program builds cleanly, but that's all. If you try it, I'd like to hear how it went in this fork's issues.
+None of this has been run on a real 3DS yet. It passes an automated test suite, and I've run custom-install-finalize 1.7 in the Azahar emulator, but that's all. If you try it, I'd like to hear how it went in this fork's issues.
 
 The pip commands below install this fork, not the original.
 
